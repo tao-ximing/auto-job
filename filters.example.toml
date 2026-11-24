@@ -1,0 +1,85 @@
+# 职位过滤规则示例。复制成 filters.toml（不进 git）后改成自己的。
+# ingest 时逐条套用，结果写进 SQLite 的 filter_results（job_id, rule, action, reason），
+# 被过滤的职位默认在网页里隐藏，可以切换"显示已过滤"检查有没有误杀。
+#
+# action:
+#   reject  直接过滤
+#   soft    保留但降权
+#   boost   排序往前（抵消一次 soft）
+#   tag     只打标签，不影响排序
+#
+# 公司名先规范化（小写，去掉 pty/ltd/inc/australia/标点），再按别名“完全相等”匹配，不做子串匹配。
+# 所有 patterns 都是正则，不区分大小写。下面每个段落都必须存在，不需要的规则留空列表即可。
+
+# ── 1. AI 数据标注 / 众包平台 ──
+[crowdwork.always]
+action = "reject"
+companies = [
+  ["DataAnnotation", "DataAnnotation.tech"],
+  ["Outlier", "Outlier AI"],
+]
+
+# 同时出现"按小时计价"和下面任一描述，就当作零工岗位。
+[crowdwork_jd]
+action = "reject"
+rate_pattern = '\$\s?\d+\s*(-|–|to)\s*\$?\s?\d+\s*(/|per\s+)\s*(hr|hour)'
+patterns = ['\brl\s+environments?\b']
+
+[crowdwork_title]
+action = "reject"
+patterns = ['annotat', 'data\s+label']
+
+# ── 1b. 外包公司 ──
+[outsourcing]
+action = "reject"
+companies = [["Example Outsourcing Co"]]
+
+# ── 2. 招聘中介 ──
+[agency.low_priority]
+action = "soft"
+companies = []
+
+[agency.normal]
+action = "tag"
+tag = "agency"
+companies = [["Hays"], ["Randstad"]]
+name_patterns = ['recruit', 'staffing']
+
+# ── 职级 ──
+[seniority]
+action = "reject"
+exempt_patterns = []
+patterns = ['\bprincipal\b', '\bdirector\b']
+
+[intern]
+action = "reject"
+patterns = ['\bintern(s|ship|ships)?\b']
+
+# ── 技术栈：off = 不想要的栈（降权），on = 想要的栈，match = 强项类别（命中 ≥ min_hits 个就 boost）──
+[stack]
+off_action = "soft"
+off_title_patterns = ['\bphp\b']
+off_jd_patterns = ['\bphp\b']
+on_patterns = ['\bpython\b']
+
+[stack.match]
+action = "boost"
+min_hits = 2
+categories = [
+  ["Python", '\bpython\b'],
+  ["SQL", '\bsql\b'],
+]
+
+[phd]
+action = "reject"
+title_patterns = ['\bph\.?\s?d\b']
+jd_patterns = []
+
+# ── 工作身份要求：reject 直接过滤，soft 只打标签 ──
+[visa]
+reject = []
+soft = []
+
+# ── Gmail 预筛额外排除的标题（可选）──
+[gmail]
+extra_ignore_subject = []

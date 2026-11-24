@@ -1,0 +1,13 @@
+jobs.db
+jobs.db-*
+.env
+credentials.json
+token.json
+__pycache__/
+push_keys.json
+.gmail.lock
+LOCAL.md
+.claude/settings.local.json
+searches.toml
+filters.toml
+test_rules.py

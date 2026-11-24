@@ -1,0 +1,21 @@
+# 搜索配置示例。复制成 searches.toml（不进 git）后改成自己的。
+# name 会记进 search_hits，网页上能看到每个职位是被哪几条搜索命中的。
+
+# SEEK：params 原样传给 SEEK 前端搜索接口。workarrangement = "3" 是 Remote。
+[[seek]]
+name = "SEEK · data engineer · Sydney"
+params = { keywords = "data engineer", where = "All Sydney NSW" }
+
+[[seek]]
+name = "SEEK · data engineer · AU remote"
+params = { keywords = "data engineer", where = "All Australia", workarrangement = "3" }
+
+# LinkedIn：geoId 从 LinkedIn 搜索页 URL 里抄（101452733 = Australia）。
+# remote 筛选参数是 f_SAL=f_SA_id_225001:272001（旧的 f_WT=2 会被页面删掉），比较宽松，
+# 所以再加 require_remote，只保留卡片地点带 "(Remote)" 的。
+[[linkedin]]
+name = "LinkedIn · data engineer · AU remote"
+keywords = "data engineer"
+geoId = "101452733"
+require_remote = true
+extra_params = { f_SAL = "f_SA_id_225001:272001" }
