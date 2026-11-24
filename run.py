@@ -8,7 +8,7 @@
 每个平台一条 runs 记录。抓到 0 条也算异常（多半是登录过期或页面改版），网页顶部会显示警告。
 """
 import argparse, json, os, subprocess, sys, tempfile, tomllib, traceback
-import linkedin_guest, seek
+import linkedin_guest, rules, seek
 from db import connect, now
 from ingest import Ingestor
 
@@ -255,7 +255,7 @@ def main():
         notify_phone(conn, t0, new, errors)
         notify_mail(conn, mail)
     if errors:
-        sys.exit(1)
+        sys.exit(2)   # 已处理、已推送的错误；systemd 里 SuccessExitStatus=2，不触发 OnFailure（那个只管崩溃，退出码 1）
 
 
 if __name__ == "__main__":
