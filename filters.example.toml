@@ -49,6 +49,8 @@ name_patterns = ['recruit', 'staffing']
 [seniority]
 action = "reject"
 exempt_patterns = []
+# 例外里仍然要过滤的（比如例外职位的 Staff 级别）
+exempt_except_patterns = []
 patterns = ['\bprincipal\b', '\bdirector\b']
 
 [intern]

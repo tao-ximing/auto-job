@@ -75,6 +75,7 @@ def load_filters(path=None):
         "seniority": [re.compile(p, flags) for p in d["seniority"]["patterns"]],
         "seniority_action": d["seniority"]["action"],
         "seniority_exempt": [re.compile(p, flags) for p in d["seniority"].get("exempt_patterns", [])],
+        "seniority_exempt_except": [re.compile(p, flags) for p in d["seniority"].get("exempt_except_patterns", [])],
         "phd_title": [re.compile(p, flags) for p in d["phd"]["title_patterns"]],
         "phd_jd": [re.compile(p, flags) for p in d["phd"]["jd_patterns"]],
         "phd_action": d["phd"]["action"],
@@ -119,7 +120,7 @@ def evaluate(posting):
             if m := p.search(jd):
                 out.append(("crowdwork_jd", F["crowd_jd_action"], _snippet(jd, m)))
                 break
-    exempt = any(p.search(title) for p in F["seniority_exempt"])
+    exempt = any(p.search(title) for p in F["seniority_exempt"]) and not any(p.search(title) for p in F["seniority_exempt_except"])
     for p in ([] if exempt else F["seniority"]):
         if m := p.search(title):
             out.append(("seniority", F["seniority_action"], m.group(0)))

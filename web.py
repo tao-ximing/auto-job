@@ -30,6 +30,19 @@ STATIC = {  # 路径 → (static/ 下的文件, content-type)
 }
 
 
+# 「我的」页第一次打开时的内容（之后以库里 kv.profile 为准，网页上可增删改）。
+# 个人信息不写在代码里（代码会推到 GitHub）：从不进 git 的 profile.json 读，没有就是空模板。
+def _default_profile():
+    p = os.path.join(HERE, "profile.json")
+    if os.path.exists(p):
+        return json.load(open(p))
+    return [{"group": "基本信息", "label": "姓名", "value": ""}, {"group": "基本信息", "label": "邮箱", "value": ""},
+            {"group": "基本信息", "label": "电话", "value": ""}, {"group": "链接", "label": "LinkedIn", "value": ""}]
+
+
+DEFAULT_PROFILE = _default_profile()
+
+
 def days_since(ts):
     return (datetime.now(timezone.utc) - datetime.fromisoformat(ts.replace("Z", "+00:00"))).days if ts else None
 
@@ -68,7 +81,8 @@ def list_jobs(c, view, q, source):
                (SELECT max(at) FROM events e WHERE e.job_id=j.id AND e.source!='auto') last_activity,
                (SELECT min(at) FROM events e WHERE e.job_id=j.id AND e.status='applied') applied_at
         FROM jobs j WHERE {' AND '.join(where)}
-        ORDER BY CASE WHEN j.status IN ('new','shortlisted') THEN j.soft_score ELSE 0 END,
+        -- 待处理：匹配分线以上一组在前、线以下一组在后（没算出分数的算以上，不埋掉），两组内都按时间
+        ORDER BY CASE WHEN j.status IN ('new','shortlisted') AND j.match_high = 0 THEN 1 ELSE 0 END,
                  CASE WHEN j.status IN ('new','shortlisted') THEN coalesce(posted_at, first_seen) ELSE coalesce(last_activity, first_seen) END DESC
         LIMIT 1000""", args).fetchall()
     match = {}
@@ -219,6 +233,16 @@ class H(BaseHTTPRequestHandler):
                 c.execute("UPDATE emails SET match_reason='手动关联' WHERE id=?", (m[1],))
                 c.commit()
                 return self.send(200, {"ok": True, "status": new, "job": jid})
+            if method == "GET" and path == "/api/profile":   # 「我的」页：投递时要填的个人信息，存在本地库里（不进 git）
+                r = c.execute("SELECT value FROM kv WHERE key='profile'").fetchone()
+                return self.send(200, json.loads(r[0]) if r else DEFAULT_PROFILE)
+            if method == "POST" and path == "/api/profile":
+                items = [{"group": str(i.get("group") or "其他")[:40], "label": str(i.get("label") or "")[:80], "value": str(i.get("value") or "")[:2000]}
+                         for i in self.body().get("items", []) if i.get("label")]
+                c.execute("INSERT INTO kv (key, value) VALUES ('profile', ?) ON CONFLICT (key) DO UPDATE SET value=excluded.value",
+                          (json.dumps(items, ensure_ascii=False),))
+                c.commit()
+                return self.send(200, items)
             if method == "GET" and path == "/api/push/key":
                 return self.send(200, {"key": push.keys()[1],
                                        "count": c.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0]})

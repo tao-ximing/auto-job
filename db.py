@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS emails (                -- 和求职相关的邮件�
 );
 CREATE INDEX IF NOT EXISTS emails_job ON emails(job_id);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS job_vectors (            -- 匹配分用的 embedding（match.py），float32 原始字节
+  job_id INTEGER PRIMARY KEY REFERENCES jobs(id),
+  model TEXT NOT NULL,
+  doc BLOB NOT NULL,                                 -- 职位名 + JD
+  title BLOB NOT NULL,                               -- 职位名（带任务说明）
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS llm_usage (               -- Gemini 用量，按月记，用来卡预算
   month TEXT PRIMARY KEY, calls INTEGER NOT NULL DEFAULT 0,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0
@@ -122,5 +129,9 @@ def connect(path=DB_PATH):
     for col in ("lookup_at", "lookup_result"):
         if col not in cols:
             conn.execute(f"ALTER TABLE emails ADD COLUMN {col} TEXT")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    for col, typ in (("match_score", "REAL"), ("match_high", "INTEGER")):   # match.py：分数，1=分数线以上 0=以下 NULL=没算
+        if col not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
     conn.commit()
     return conn

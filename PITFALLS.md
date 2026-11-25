@@ -92,6 +92,16 @@
 
 - **iOS 输入框字号 < 16px，聚焦时页面自动放大且不缩回**。→ input / select / textarea 统一 16px。
 
+## 匹配分 / Ollama
+
+- **Ollama 屏蔽了 CUDA 还是用显卡**：它会改走 Vulkan 用上同一块 NVIDIA。→ `CUDA_VISIBLE_DEVICES=-1` + `OLLAMA_VULKAN=false` + `GGML_VK_VISIBLE_DEVICES=-1`，用 `nvidia-smi` 确认。
+- **全量算向量时 12 核跑满、风扇狂转**。→ systemd 里 `CPUQuota=400%`、`Nice=19`。日常每小时只算新职位，几十秒。
+- **只跑一次交叉验证的数字会偏乐观**（"保留全部投过的、挡掉 41%"，换 5 种分折后其实约 17%±9%）。→ 评估要多换几次分折。
+
 ## 环境
 
 - **Python 3.14 没有 pip**。→ 全部只用标准库 + 系统自带的 `cryptography`、`PIL`。
+
+## 左滑时重绘列表会把卡片"卡"在半路（2026-11-25）
+左滑不投后 220ms 会重绘列表。如果这时手指正在滑下一张卡，那张卡的 DOM 被换掉，`touchend` 发到已脱离页面的节点上、冒泡不到列表，
+结果卡片停在半路、这次不投也没发出去。现在手指按着时 `renderList` 只记一笔，松手后再画；`touchcancel` 也会把卡片弹回原位。

@@ -194,10 +194,14 @@ def notify_phone(conn, t0, new, errors):
     import push
     try:
         if new:
-            rows = conn.execute("SELECT id, title, company FROM jobs WHERE created_at >= ? AND filtered=0 ORDER BY id DESC", (t0,)).fetchall()
+            # 分数线以上的排前面（没算出分数的也当作以上，不埋掉），同组按时间
+            rows = conn.execute("""SELECT id, title, company, match_high FROM jobs WHERE created_at >= ? AND filtered=0
+                                   ORDER BY coalesce(match_high, 1) DESC, id DESC""", (t0,)).fetchall()
+            hi = sum(1 for r in rows if r["match_high"] != 0)
             lines = [f"{r['title']} @ {r['company']}" for r in rows[:3]] + ([f"…还有 {len(rows) - 3} 个"] if len(rows) > 3 else [])
             url = f"/?job={rows[0]['id']}" if len(rows) == 1 else "/"
-            push.send_all(conn, f"{new} 个新职位", "\n".join(lines), url, urgency="high")
+            title = f"{new} 个新职位" + (f"（{hi} 个匹配）" if hi < len(rows) else "")
+            push.send_all(conn, title, "\n".join(lines), url, urgency="high")
         if errors:
             push.send_all(conn, "抓取出错", "\n".join(errors))
     except Exception as e:
@@ -235,6 +239,13 @@ def main():
         print("LinkedIn: 距上次不到 %g 分钟，这次跳过" % a.linkedin_min_interval)
     elif a.only in (None, "linkedin"):
         print("LinkedIn: 看到 %d 条，新增 %d 条" % run_linkedin(conn, ing, conf, a.linkedin_window, a.linkedin_pages, a.linkedin_max_new))
+    if a.only in (None, "seek", "linkedin"):   # 匹配分：放在推送之前，推送按匹配分挑前几个
+        try:
+            import match
+            r = match.run(conn)
+            print("匹配分：新算向量 %d 个，打分 %d 个" % (r["vectors"], r["scored"]))
+        except Exception as e:   # Ollama 没开等：只是没有匹配分，不算抓取出错
+            print(f"[match] 跳过：{e}", file=sys.stderr)
     mail = None
     if a.only in (None, "gmail"):   # 放在抓取之后：新抓到的职位也能被邮件匹配上
         mail = run_gmail(conn)

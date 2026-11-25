@@ -88,8 +88,12 @@ try {
         seen++;
         const label = await card.locator('button[aria-label^="Dismiss "]').first().getAttribute('aria-label', { timeout: 1000 }).catch(() => null);
         const lines = (await card.innerText()).split('\n').map(x => x.trim()).filter(Boolean);
-        const title = label ? label.replace(/^Dismiss /, '').replace(/ job$/, '') : lines[0]?.replace(/\s*\(Verified job\)$/, '');
-        const ti = lines.findLastIndex(l => l === title);
+        // 职位名末尾常带空格 / "(Verified job)"，而 lines 已经 trim 过：比较前两边都规范化，
+        // 否则找不到职位名那一行（ti = -1），公司、地点整体错位（公司栏变成职位名，地点栏变成公司名）。
+        const norm = s => (s || '').replace(/\s*\(Verified job\)\s*$/, '').replace(/\s+/g, ' ').trim();
+        const title = norm(label ? label.replace(/^Dismiss /, '').replace(/ job$/, '') : lines[0]);
+        let ti = lines.findLastIndex(l => norm(l) === title);
+        if (ti < 0) ti = 0;   // 找不到就当第一行是职位名
         const company = lines[ti + 1], location = lines[ti + 2];
         const base = { source: 'linkedin', source_id: id, search: s.name, url: `https://www.linkedin.com/jobs/view/${id}/`, title, company, location };
 

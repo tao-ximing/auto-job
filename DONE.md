@@ -24,6 +24,16 @@
 - **去重**（`ingest.py`）：同平台按 id；跨平台按 JD 相似度 + 公司 / 职位名；拿不准的标疑似重复，网页上确认；合并后优先展示非中介的帖子。
 - **测试**：`python3 -m unittest test_rules`（依赖个人规则，不进 git）。
 
+## 匹配分（`match.py`）
+
+- 本地 Ollama + Qwen3-Embedding-0.6B（只用 CPU、最多 4 核、最低优先级，配置在 `/etc/systemd/system/ollama.service.d/cpu-only.conf`）。
+  简历在 `resume.txt`（不进 git），不出本机。
+- 每个职位两个向量（职位名 + JD、职位名），加 JD·简历、职位名·目标方向两个相似度，用你的「已投 / 不投」训练逻辑回归；每天重训。
+- 分数线：交叉验证下让 90% 投过的职位在线以上。**不隐藏任何职位**：待处理里线以上一组在前、线以下一组在后（中间有分隔线、卡片标「低匹配」），
+  两组内都按时间排；推送先列线以上的。
+- 离线验证（2026-11-25，正 28 / 负约 160）：AUC ≈ 0.82，前 20 名里平均 11 个投过的（随机约 3 个）；线以下约一半是你会不投的。
+  试过按句"要求覆盖度"、去掉 JD 套话，都没有提升。
+
 ## 网页
 
 - `web.py` + `static/index.html`，只用标准库，本机 http://127.0.0.1:8765。
@@ -34,6 +44,8 @@
 - 详情里还有：原帖链接、过滤原因和放行、疑似重复合并、问答、时间线、命中的搜索。
 - **手机访问**：`tailscale serve` 发布在 https://<主机名>.<tailnet>.ts.net:8443/（只限 tailnet 内）。
 - **PWA + 推送**（`push.py`、`static/sw.js`、`static/manifest.webmanifest`）：手机已添加到主屏幕并订阅成功，后台能收到推送。
+
+- **我的**（第 5 个标签）：投递时要填的个人信息，点一行复制、可增删改。存在库里 `kv.profile`；初始内容来自不进 git 的 `profile.json`。
 
 ## 自动运行（systemd user，开了 Linger，开机就跑）
 
@@ -66,3 +78,4 @@
 ## 还没做
 - 按职位名只保留工程类岗位（目前 Data Administrator、Martech Manager 之类还会进来）。
 - 职位下架后自动标记。
+- 2026-11-25：签证规则扩写，要求公民 / PR / NV1 / NV2 / TSPV / Baseline / AGSVA 的直接过滤（"Australian or New Zealand citizen"、"open to … citizens"、"Eligibility: Australian Citizens" 等写法）；"Citizenship preferred"、"eligibility for security clearance" 只打标签。修了快速连续左滑时卡片卡住的问题。

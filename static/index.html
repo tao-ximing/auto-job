@@ -65,6 +65,23 @@ main { min-height: 0; }
 .card:active { background: var(--press); }
 .card.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 .card.gone { opacity: 0; transform: translateX(-30%); }
+.prof { background: var(--panel); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px; }
+.prow { display: grid; grid-template-columns: 1fr auto; grid-template-areas: "k b" "v b"; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.prof h3 + .prow { border-top: 0; }
+.prow:active { background: var(--press); }
+.prow .pk { grid-area: k; font-size: 12px; color: var(--muted); }
+.prow .pv { grid-area: v; font-size: 15px; word-break: break-all; }
+.prow .pv.empty { color: var(--faint); }
+.prow .icon-btn { grid-area: b; }
+.sep { margin: 18px 4px 10px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+.sep::before, .sep::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+/* 待处理：左滑不投。卡片外面包一层，滑动时露出背后的红色"不投" */
+.swipe { position: relative; margin-bottom: 8px; border-radius: 14px; overflow: hidden; transition: height .2s, margin .2s; }
+.swipe > .card { margin-bottom: 0; position: relative; touch-action: pan-y; }
+.swipe-bg { position: absolute; inset: 0; background: var(--bad-bg); color: var(--bad-ink); font-weight: 600;
+  display: flex; align-items: center; justify-content: flex-end; padding-right: 22px; opacity: 0; }
+.swipe.armed .swipe-bg { background: #e5484d; color: #fff; }
+.swipe.out { height: 0 !important; margin-bottom: 0; }
 .card .t { font-weight: 600; font-size: 16px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card .co { color: var(--ink); font-size: 14px; }
 .card .meta { color: var(--muted); font-size: 13px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -235,13 +252,16 @@ const ICON = {
   filtered: '<svg viewBox="0 0 24 24"><path d="M4 5h16l-6 8v5l-4 2v-7z"/></svg>',
   ext: '<svg viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   more: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg>',
+  me: '<svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
+  edit: '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
 };
-const VIEWS = [['active', '待处理'], ['pipeline', '进行中'], ['closed', '已结束'], ['filtered', '已过滤']];
-const TITLES = { ...Object.fromEntries([['active', '待处理'], ['pipeline', '进行中'], ['closed', '已结束'], ['filtered', '已过滤']]), all: '全部职位' };
+const VIEWS = [['active', '待处理'], ['pipeline', '进行中'], ['closed', '已结束'], ['filtered', '已过滤'], ['me', '我的']];
+const TITLES = { ...Object.fromEntries([['active', '待处理'], ['pipeline', '进行中'], ['closed', '已结束'], ['filtered', '已过滤']]), all: '全部职位', me: '我的' };
 const VIEW_OF = s => ['new', 'shortlisted'].includes(s) ? 'active' : ['applied', 'assessment', 'interview', 'offer'].includes(s) ? 'pipeline' : 'closed';
 // 每个状态下底部操作栏的主要按钮（其余放进"更多"）
 const PRIMARY = {
-  new: ['shortlisted', 'skipped', 'applied'], shortlisted: ['skipped', 'applied'],
+  // 「想投」不放按钮了（从来没用过：看到合适的直接投）；状态本身保留，老数据照常显示
+  new: ['skipped', 'applied'], shortlisted: ['skipped', 'applied'],
   applied: ['assessment', 'interview', 'rejected'], assessment: ['interview', 'rejected'], interview: ['offer', 'rejected'],
   offer: ['rejected'], skipped: ['new'], rejected: ['new'], closed: ['new'],
 };
@@ -298,13 +318,14 @@ $('scrim').addEventListener('click', closeSheet);
 async function loadSummary() {
   const s = state.summary = await api('/api/summary');
   $('tabbar').innerHTML = VIEWS.map(([v, l]) =>
-    `<button data-view="${v}" class="${v === state.view ? 'on' : ''}">${ICON[v]}<span>${l} <span class="n">${s.views[v] ?? 0}</span></span></button>`).join('');
+    `<button data-view="${v}" class="${v === state.view ? 'on' : ''}">${ICON[v]}<span>${l}${v === 'me' ? '' : ` <span class="n">${s.views[v] ?? 0}</span>`}</span></button>`).join('');
   $('menuBtn').classList.toggle('dot', !!s.unmatched_emails);
   const errs = s.runs.filter(r => r.error);
   $('banner').hidden = !errs.length;
   $('banner').innerHTML = errs.map(r => `<b>${SRC[r.source] || r.source}</b>：${esc(r.error.trim().split('\n').pop())}`).join('<br>');
 }
 async function loadList() {
+  if (state.view === 'me') return loadProfile();
   const p = new URLSearchParams({ view: state.view });   // 只搜当前页
   if (state.q) p.set('q', state.q);
   if (state.source) p.set('source', state.source);
@@ -312,30 +333,77 @@ async function loadList() {
   $('viewTitle').textContent = state.q ? `${TITLES[state.view]} · 搜索` : TITLES[state.view];
   renderList();
 }
+// 手指还按在屏幕上时不重绘列表：重绘会把正在滑的卡片从页面上拿掉，之后的 touchend 就收不到了，卡片停在半路、这次不投也丢了
+let touching = false, renderPending = false;
+addEventListener('touchstart', () => { touching = true; }, { capture: true, passive: true });
+const touchDone = e => { if (e.touches.length) return; touching = false; if (renderPending) { renderPending = false; setTimeout(renderList, 0); } };
+addEventListener('touchend', touchDone, { capture: true, passive: true });
+addEventListener('touchcancel', touchDone, { capture: true, passive: true });
 function renderList() {
+  if (touching && state.view === 'active') { renderPending = true; return; }
   if (!state.jobs.length) {
     const hint = state.q ? `「${TITLES[state.view]}」里没有，换个关键词或切到别的页看看` : state.view === 'active' ? '新职位来了会推送提醒你' : '';
     $('list').innerHTML = `<div class="empty"><b>${state.q ? '没有找到' : '这里没有职位'}</b>${hint}</div>`;
     return;
   }
+  let lowShown = false;   // 待处理：在匹配分线以下的第一张卡片前插一条分隔线
   $('list').innerHTML = state.jobs.map(j => {
     const srcs = [...new Set(j.postings.map(p => SRC[p.source]))].join(' + ');
     const wa = j.postings.map(p => p.work_arrangement).find(Boolean);
     const salary = j.postings.map(p => p.salary).find(Boolean);
     const showStatus = state.view !== 'active' || j.status === 'shortlisted';
-    return `<div class="card ${j.id === state.sel ? 'sel' : ''}" data-id="${j.id}">
+    const swipe = state.view === 'active';   // 只有待处理可以左滑不投
+    const low = j.match_high === 0;
+    const sep = state.view === 'active' && !state.q && low && !lowShown ? (lowShown = true, '<div class="sep">以下匹配度较低</div>') : '';
+    return `${sep}${swipe ? `<div class="swipe" data-swipe="${j.id}"><div class="swipe-bg">不投</div>` : ''}<div class="card ${j.id === state.sel ? 'sel' : ''}" data-id="${j.id}">
       <div class="t">${esc(j.title)}</div>
       <div class="co">${esc(j.company)}</div>
       <div class="meta"><span>${esc(j.location || '')}</span>${wa ? `<span>· ${esc(wa)}</span>` : ''}</div>
       <div class="meta"><span>${ago(j.posted_at || j.first_seen)}</span><span>· ${srcs}</span>${salary ? `<span>· ${esc(salary)}</span>` : ''}${j.match === 'jd' ? `<span>· JD 提到“${esc(state.q)}”</span>` : ''}</div>
       <div class="chips">
         ${showStatus && j.status !== 'new' ? `<span class="chip st">${STATUS[j.status]}</span>` : ''}
+        ${low && j.status === 'new' ? '<span class="chip">低匹配</span>' : ''}
         ${j.quiet_days ? `<span class="chip warn">${j.quiet_days} 天无动静</span>` : ''}
         ${j.postings.some(p => p.easy_apply) ? '<span class="chip ok">Easy Apply</span>' : ''}
         ${tagChips(j.tags)}
       </div>
-    </div>`;
+    </div>${swipe ? '</div>' : ''}`;
   }).join('');
+}
+
+// ── 我的：投递时要填的个人信息，点一下复制 ──
+async function loadProfile() {
+  state.profile = await api('/api/profile');
+  $('viewTitle').textContent = '我的';
+  renderProfile();
+}
+function renderProfile() {
+  const groups = [...new Set(state.profile.map(i => i.group))];
+  $('list').innerHTML = `<p class="d-sub" style="margin:4px 4px 12px">点一行复制；右边的笔可以改。只存在本机，不会上传。</p>` +
+    groups.map(g => `<div class="sec prof"><h3>${esc(g)}</h3>${state.profile.map((it, i) => it.group !== g ? '' :
+      `<div class="prow" data-copy="${i}"><div class="pk">${esc(it.label)}</div>
+        <div class="pv ${it.value ? '' : 'empty'}">${esc(it.value || '（还没填，点右边的笔）')}</div>
+        <button class="icon-btn" data-pedit="${i}" aria-label="编辑">${ICON.edit}</button></div>`).join('')}</div>`).join('') +
+    `<div class="row-btns" style="margin:12px 4px"><button class="btn" data-pedit="new">添加一项</button></div>`;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch {   // 非 https 或权限被拒时的兜底
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+}
+function profileSheet(i) {
+  const it = i === 'new' ? { group: state.profile.at(-1)?.group || '其他', label: '', value: '' } : state.profile[i];
+  openSheet(`<h4>${i === 'new' ? '添加一项' : '编辑'}</h4>
+    <input class="field" id="pf-label" placeholder="名称（如 LinkedIn）" value="${esc(it.label)}" style="margin-bottom:8px">
+    <textarea id="pf-value" rows="3" placeholder="内容" style="margin-bottom:8px">${esc(it.value)}</textarea>
+    <input class="field" id="pf-group" placeholder="分组（如 链接）" value="${esc(it.group)}" style="margin-bottom:12px">
+    <div class="row-btns"><button class="btn primary" data-psave="${i}">保存</button>${i === 'new' ? '' : `<button class="btn" data-pdel="${i}">删除</button>`}</div>`);
+}
+async function saveProfile(items) {
+  state.profile = await api('/api/profile', { items });
+  renderProfile();
 }
 
 // ── 详情 ──
@@ -453,7 +521,7 @@ async function setStatus(status, opts = {}) {
 
 function moreSheet() {
   const cur = state.job.job.status;
-  openSheet(`<h4>改状态</h4><p>当前：${STATUS[cur]}</p><div class="sheet-list">${Object.entries(STATUS).map(([k, l]) =>
+  openSheet(`<h4>改状态</h4><p>当前：${STATUS[cur]}</p><div class="sheet-list">${Object.entries(STATUS).filter(([k]) => k !== 'shortlisted' || k === cur).map(([k, l]) =>
     `<button data-sheet-status="${k}" class="${k === cur ? 'on' : ''}"><span>${l}</span><span class="sm">${VIEW_OF(k) === 'active' ? '待处理' : VIEW_OF(k) === 'pipeline' ? '进行中' : '已结束'}</span></button>`).join('')}</div>`);
 }
 function qaSheet(id, afterApply) {
@@ -505,8 +573,25 @@ async function pickJobSheet(mailId, q) {
 
 // ── 事件 ──
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-view],[data-id],[data-status],[data-act],[data-dup],[data-delqa],[data-open],[data-sheet-status],[data-qa-save],[data-mail-link],[data-mail-ignore],[data-pick-job]');
+  const t = e.target.closest('[data-copy],[data-pedit],[data-psave],[data-pdel],[data-view],[data-id],[data-status],[data-act],[data-dup],[data-delqa],[data-open],[data-sheet-status],[data-qa-save],[data-mail-link],[data-mail-ignore],[data-pick-job]');
   if (!t) return;
+  if (t.dataset.pedit) return profileSheet(t.dataset.pedit === 'new' ? 'new' : Number(t.dataset.pedit));
+  if (t.dataset.copy) {
+    const it = state.profile[Number(t.dataset.copy)];
+    if (!it.value) return profileSheet(Number(t.dataset.copy));
+    await copyText(it.value); return toast(`已复制「${it.label}」`);
+  }
+  if (t.dataset.psave) {
+    const v = { label: $('pf-label').value.trim(), value: $('pf-value').value.trim(), group: $('pf-group').value.trim() || '其他' };
+    if (!v.label) return toast('名称不能为空');
+    const items = [...state.profile];
+    if (t.dataset.psave === 'new') items.push(v); else items[Number(t.dataset.psave)] = v;
+    closeSheet(); await saveProfile(items); return toast('已保存');
+  }
+  if (t.dataset.pdel) {
+    const items = state.profile.filter((_, i) => i !== Number(t.dataset.pdel));
+    closeSheet(); await saveProfile(items); return toast('已删除');
+  }
   if (t.dataset.view) {
     state.view = t.dataset.view; lsSet('view', state.view);
     // 切页时保留搜索词：在新的页里接着搜
@@ -592,6 +677,63 @@ setInterval(() => {
   const typing = ['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName);
   if (document.visibilityState === 'visible' && !typing && !$('sheet').classList.contains('open')) { lastRefresh = Date.now(); refreshAll(false); }
 }, 60000);
+// 待处理左滑不投（手机）：横向滑过卡片宽度的 1/3 松手 → 不投，可撤销；先判断方向，竖着滑照常滚动
+async function quickSkip(id) {
+  const job = state.jobs.find(j => j.id === id);
+  const prev = job ? job.status : 'new';
+  await api(`/api/jobs/${id}/status`, { status: 'skipped', detail: '左滑' });
+  if (state.sel === id && !isDesktop()) closeDetail();
+  setTimeout(() => { loadSummary(); loadList(); }, 220);
+  toast('已标记为「不投」', '撤销', async () => {
+    await api(`/api/jobs/${id}/status`, { status: prev, detail: '撤销' });
+    await Promise.all([loadSummary(), loadList()]);
+    toast(`已恢复为「${STATUS[prev]}」`);
+  });
+}
+(() => {
+  let w = null, x0 = 0, y0 = 0, dx = 0, mode = null, suppressClick = false;
+  const card = () => w.querySelector('.card'), bg = () => w.querySelector('.swipe-bg');
+  $('list').addEventListener('touchstart', e => {
+    w = e.target.closest('.swipe'); if (!w) return;
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null;
+  }, { passive: true });
+  $('list').addEventListener('touchmove', e => {
+    if (!w) return;
+    const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+    if (!mode && Math.hypot(mx, my) > 8) mode = Math.abs(mx) > Math.abs(my) * 1.2 && mx < 0 ? 'x' : 'y';
+    if (mode !== 'x') return;
+    e.preventDefault();                                  // 横滑时不让页面跟着动
+    dx = Math.min(0, mx);
+    card().style.transition = 'none'; card().style.transform = `translateX(${dx}px)`;
+    bg().style.opacity = Math.min(1, -dx / 60);
+    w.classList.toggle('armed', -dx > w.offsetWidth / 3);
+  }, { passive: false });
+  $('list').addEventListener('touchcancel', () => {
+    if (!w) return;
+    const el = w, c = card(); w = null;
+    c.style.transition = ''; c.style.transform = ''; el.classList.remove('armed');
+    setTimeout(() => { const b = el.querySelector('.swipe-bg'); if (b) b.style.opacity = 0; }, 250);
+  });
+  $('list').addEventListener('touchend', () => {
+    if (!w) return;
+    const el = w, c = card(); w = null;
+    if (mode !== 'x') return;
+    suppressClick = true; setTimeout(() => suppressClick = false, 350);
+    c.style.transition = '';
+    if (-dx > el.offsetWidth / 3) {
+      c.style.transform = 'translateX(-110%)';
+      el.style.height = el.offsetHeight + 'px';
+      requestAnimationFrame(() => el.classList.add('out'));
+      quickSkip(Number(el.dataset.swipe));
+    } else {
+      c.style.transform = ''; el.classList.remove('armed');
+      setTimeout(() => { const b = el.querySelector('.swipe-bg'); if (b) b.style.opacity = 0; }, 250);
+    }
+  });
+  // 滑完松手时浏览器可能还会补发一个 click，别把详情打开
+  $('list').addEventListener('click', e => { if (suppressClick) { e.stopPropagation(); e.preventDefault(); } }, true);
+})();
+
 // 下拉刷新（手机）
 (() => {
   let y0 = null, dy = 0;
