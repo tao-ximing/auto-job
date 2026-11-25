@@ -13,3 +13,5 @@ filters.toml
 test_rules.py
 resume.txt
 profile.json
+blocked_companies.json
+blocked_companies.json.tmp

@@ -141,6 +141,7 @@ textarea:focus, .field:focus { border-color: var(--accent); }
 .row-btns { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .btn { border-radius: 10px; padding: 9px 14px; background: var(--chip); font-weight: 600; font-size: 14px; }
 .btn.primary { background: var(--accent); color: var(--accent-ink); }
+.btn.danger { background: var(--bad-bg); color: var(--bad-ink); }
 .btn:active { opacity: .7; }
 
 /* 详情底部操作栏 */
@@ -240,7 +241,7 @@ textarea:focus, .field:focus { border-color: var(--accent); }
 const STATUS = { new: '新', shortlisted: '想投', skipped: '不投', applied: '已投', assessment: '笔试/测评', interview: '面试', rejected: '被拒', offer: 'Offer', closed: '已关闭' };
 const RULE = { crowdwork_company: '众包/标注', crowdwork_title: '标注类职位', crowdwork_jd: 'AI 训练零工', outsourcing: 'IT 外包', seniority: '职级过高', phd: 'PhD',
                agency: '中介', agency_low_priority: '低优先级中介', visa: '身份要求', visa_note: '工作权限',
-               intern: '实习', off_stack: '技术栈不对口', stack_match: '技术栈匹配' };
+               blocked: '已拉黑', intern: '实习', off_stack: '技术栈不对口', stack_match: '技术栈匹配' };
 const SRC = { seek: 'SEEK', linkedin: 'LinkedIn', email: 'Gmail' };   // email：搜不到职位帖子，按邮件建的职位
 const MAIL = { applied: '已投递确认', viewed: '对方已查看', rejected: '被拒', assessment: '笔试/测评', interview: '面试邀请', offer: 'Offer', closed: '职位已关闭', other: '其他' };
 const MAIL_CLS = { rejected: 'bad', interview: 'ok', offer: 'ok', assessment: 'warn' };
@@ -313,6 +314,37 @@ function openSheet(html) {
 }
 function closeSheet() { $('sheet').classList.remove('open'); $('scrim').classList.remove('open'); }
 $('scrim').addEventListener('click', closeSheet);
+// 弹层往下拖关掉（手机）：弹层内容已经滚到顶时往下拖才算；拖过 80px 或者快速一甩就关
+(() => {
+  const sh = $('sheet');
+  let y0 = null, t0 = 0, dy = 0, drag = false;
+  const at = d => isDesktop() ? `translate(-50%, ${d}px)` : `translateY(${d}px)`;
+  sh.addEventListener('touchstart', e => {
+    if (e.target.closest('textarea, input, select')) { y0 = null; return; }
+    y0 = e.touches[0].clientY; t0 = Date.now(); dy = 0; drag = false;
+  }, { passive: true });
+  sh.addEventListener('touchmove', e => {
+    if (y0 == null) return;
+    dy = e.touches[0].clientY - y0;
+    if (!drag) {
+      if (dy < 0 || sh.scrollTop > 0) { y0 = null; return; }   // 往上滑 / 内容没在顶部：正常滚动
+      if (dy < 6) return;
+      drag = true;
+    }
+    e.preventDefault();
+    sh.style.transition = 'none'; sh.style.transform = at(Math.max(0, dy));
+  }, { passive: false });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null;
+    if (!drag) return;
+    const fast = dy > 30 && dy / Math.max(Date.now() - t0, 1) > 0.5;
+    sh.style.transition = ''; sh.style.transform = '';
+    if (dy > 80 || fast) closeSheet();
+  };
+  sh.addEventListener('touchend', end);
+  sh.addEventListener('touchcancel', () => { dy = 0; end(); });
+})();
 
 // ── 数据 ──
 async function loadSummary() {
@@ -373,7 +405,7 @@ function renderList() {
 
 // ── 我的：投递时要填的个人信息，点一下复制 ──
 async function loadProfile() {
-  state.profile = await api('/api/profile');
+  [state.profile, state.blocked] = await Promise.all([api('/api/profile'), api('/api/blocked')]);
   $('viewTitle').textContent = '我的';
   renderProfile();
 }
@@ -384,7 +416,11 @@ function renderProfile() {
       `<div class="prow" data-copy="${i}"><div class="pk">${esc(it.label)}</div>
         <div class="pv ${it.value ? '' : 'empty'}">${esc(it.value || '（还没填，点右边的笔）')}</div>
         <button class="icon-btn" data-pedit="${i}" aria-label="编辑">${ICON.edit}</button></div>`).join('')}</div>`).join('') +
-    `<div class="row-btns" style="margin:12px 4px"><button class="btn" data-pedit="new">添加一项</button></div>`;
+    `<div class="row-btns" style="margin:12px 4px"><button class="btn" data-pedit="new">添加一项</button></div>` +
+    `<div class="sec prof"><h3>拉黑的公司</h3>${(state.blocked || []).length ? state.blocked.map(b =>
+      `<div class="prow" style="cursor:default"><div class="pk">${b.at ? fmt(b.at) : ''}</div><div class="pv">${esc(b.name)}</div>
+        <button class="btn" data-unblock="${esc(b.name)}">取消</button></div>`).join('')
+      : '<div class="d-sub" style="padding:8px 0">还没有。在职位详情里点「⋯」→ 拉黑这家公司。</div>'}</div>`;
 }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); }
@@ -522,7 +558,9 @@ async function setStatus(status, opts = {}) {
 function moreSheet() {
   const cur = state.job.job.status;
   openSheet(`<h4>改状态</h4><p>当前：${STATUS[cur]}</p><div class="sheet-list">${Object.entries(STATUS).filter(([k]) => k !== 'shortlisted' || k === cur).map(([k, l]) =>
-    `<button data-sheet-status="${k}" class="${k === cur ? 'on' : ''}"><span>${l}</span><span class="sm">${VIEW_OF(k) === 'active' ? '待处理' : VIEW_OF(k) === 'pipeline' ? '进行中' : '已结束'}</span></button>`).join('')}</div>`);
+    `<button data-sheet-status="${k}" class="${k === cur ? 'on' : ''}"><span>${l}</span><span class="sm">${VIEW_OF(k) === 'active' ? '待处理' : VIEW_OF(k) === 'pipeline' ? '进行中' : '已结束'}</span></button>`).join('')}</div>
+    ${state.job.job.company ? `<div class="row-btns" style="margin-top:12px"><button class="btn danger" data-block="${esc(state.job.job.company)}">拉黑「${esc(state.job.job.company)}」</button></div>
+    <p style="font-size:12px;margin-top:6px">这家公司以后的职位直接过滤，现有的也移到「已过滤」。可以在「我的」页取消。</p>` : ''}`);
 }
 function qaSheet(id, afterApply) {
   openSheet(`<h4>${afterApply ? '已投 ✓ 记一下申请时的问题？' : '添加问答'}</h4>
@@ -573,8 +611,22 @@ async function pickJobSheet(mailId, q) {
 
 // ── 事件 ──
 document.addEventListener('click', async e => {
-  const t = e.target.closest('[data-copy],[data-pedit],[data-psave],[data-pdel],[data-view],[data-id],[data-status],[data-act],[data-dup],[data-delqa],[data-open],[data-sheet-status],[data-qa-save],[data-mail-link],[data-mail-ignore],[data-pick-job]');
+  const t = e.target.closest('[data-block],[data-unblock],[data-copy],[data-pedit],[data-psave],[data-pdel],[data-view],[data-id],[data-status],[data-act],[data-dup],[data-delqa],[data-open],[data-sheet-status],[data-qa-save],[data-mail-link],[data-mail-ignore],[data-pick-job]');
   if (!t) return;
+  if (t.dataset.block != null || t.dataset.unblock != null) {
+    const on = t.dataset.block != null, company = on ? t.dataset.block : t.dataset.unblock;
+    const setBlock = async v => {
+      const r = await api('/api/blocked', { company, blocked: v });
+      state.blocked = r.list;
+      await Promise.all([loadSummary(), loadList()]);
+      if (state.sel) { try { renderDetail(await api('/api/jobs/' + state.sel), true); } catch {} }
+      return r;
+    };
+    closeSheet();
+    const r = await setBlock(on);
+    if (on && !isDesktop()) closeDetail();
+    return toast(on ? `已拉黑「${company}」，过滤了 ${r.jobs} 个职位` : `已取消拉黑「${company}」`, '撤销', () => setBlock(!on).then(() => toast('已撤销')));
+  }
   if (t.dataset.pedit) return profileSheet(t.dataset.pedit === 'new' ? 'new' : Number(t.dataset.pedit));
   if (t.dataset.copy) {
     const it = state.profile[Number(t.dataset.copy)];

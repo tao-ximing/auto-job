@@ -79,3 +79,5 @@
 - 按职位名只保留工程类岗位（目前 Data Administrator、Martech Manager 之类还会进来）。
 - 职位下架后自动标记。
 - 2026-11-25：签证规则扩写，要求公民 / PR / NV1 / NV2 / TSPV / Baseline / AGSVA 的直接过滤（"Australian or New Zealand citizen"、"open to … citizens"、"Eligibility: Australian Citizens" 等写法）；"Citizenship preferred"、"eligibility for security clearance" 只打标签。修了快速连续左滑时卡片卡住的问题。
+- 2026-11-25：拉黑公司。职位详情「⋯」→ 拉黑「公司」，这家以后的职位直接过滤、现有的移到「已过滤」，可撤销；「我的」页底部列出拉黑的公司，可以取消。名单存在 `blocked_companies.json`（不进 git），网页和定时抓取都读它。
+- 2026-11-25：底部弹层（改状态、设置、编辑等）可以往下拖关掉：拖过 80px 或快速一甩；弹层内容没滚到顶时照常滚动，在输入框里拖不会关。

@@ -170,6 +170,19 @@ def refilter(conn):
     conn.commit()
 
 
+def refilter_company(conn, company):
+    """拉黑 / 取消拉黑后：只重算这家公司的帖子。返回受影响的 job 数。"""
+    cn = rules.norm_company(company)
+    ing, jobs = Ingestor(conn), set()
+    for r in conn.execute("SELECT * FROM postings").fetchall():
+        if rules.norm_company(r["company"]) == cn:
+            ing._apply_filters(r["id"], dict(r)); jobs.add(r["job_id"])
+    for jid in jobs:
+        refresh_job(conn, jid)
+    conn.commit()
+    return len(jobs)
+
+
 def rebuild(conn):
     """改了过滤规则或去重阈值之后，从头重算所有 posting 的过滤结果和归属。有手动操作过的记录时拒绝执行，免得丢状态。"""
     if conn.execute("SELECT 1 FROM events WHERE source != 'auto' LIMIT 1").fetchone() or \

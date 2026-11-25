@@ -1,5 +1,5 @@
 """规范化、过滤规则（filters.toml）和去重打分。纯函数，不碰数据库，方便测试。"""
-import hashlib, os, re, tomllib
+import hashlib, json, os, re, tomllib
 from functools import lru_cache
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -45,6 +45,40 @@ def config_path(name):
     """个人配置（searches.toml / filters.toml）不进 git；没有时退回仓库里的 *.example.toml。"""
     local = os.path.join(HERE, name)
     return local if os.path.exists(local) else os.path.join(HERE, name.replace(".toml", ".example.toml"))
+
+
+# ── 网页上手动拉黑的公司（blocked_companies.json，不进 git）──────────────────
+BLOCKED_PATH = os.environ.get("AUTO_JOB_BLOCKED") or os.path.join(HERE, "blocked_companies.json")
+_blocked_cache = (None, {})
+
+
+def blocked_list():
+    """[{name, at}]，按拉黑时间排。"""
+    try:
+        return json.load(open(BLOCKED_PATH))
+    except (FileNotFoundError, ValueError):
+        return []
+
+
+def blocked():
+    """{规范化公司名: 展示名}。文件改了会自动重新读（网页和定时任务是不同进程）。"""
+    global _blocked_cache
+    try:
+        mt = os.path.getmtime(BLOCKED_PATH)
+    except OSError:
+        return {}
+    if _blocked_cache[0] != (BLOCKED_PATH, mt):
+        _blocked_cache = ((BLOCKED_PATH, mt), {norm_company(b["name"]): b["name"] for b in blocked_list()})
+    return _blocked_cache[1]
+
+
+def set_blocked(name, on, at=None):
+    items = [b for b in blocked_list() if norm_company(b["name"]) != norm_company(name)]
+    if on:
+        items.append({"name": name.strip(), "at": at})
+    tmp = BLOCKED_PATH + ".tmp"
+    json.dump(items, open(tmp, "w"), ensure_ascii=False, indent=1)
+    os.replace(tmp, BLOCKED_PATH)
 
 
 # ── 过滤规则 ──────────────────────────────────────────────────────────────
@@ -109,6 +143,8 @@ def evaluate(posting):
     co, title, jd = posting.get("company") or "", posting.get("title") or "", posting.get("description") or ""
     cn = norm_company(co)
 
+    if cn and cn in (B := blocked()):
+        out.append(("blocked", "reject", B[cn]))
     if cn in F["crowd"]:
         out.append(("crowdwork_company", F["crowd_action"], F["crowd"][cn]))
     for p in F["crowd_title"]:

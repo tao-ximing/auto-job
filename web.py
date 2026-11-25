@@ -6,8 +6,8 @@ import json, os, re, sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from db import STATUSES, connect, now
-from ingest import merge_jobs
-import push, gmail_sync
+from ingest import merge_jobs, refilter_company
+import push, gmail_sync, rules
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VIEWS = {
@@ -233,6 +233,15 @@ class H(BaseHTTPRequestHandler):
                 c.execute("UPDATE emails SET match_reason='手动关联' WHERE id=?", (m[1],))
                 c.commit()
                 return self.send(200, {"ok": True, "status": new, "job": jid})
+            if method == "GET" and path == "/api/blocked":   # 手动拉黑的公司
+                return self.send(200, rules.blocked_list())
+            if method == "POST" and path == "/api/blocked":
+                b = self.body(); name = (b.get("company") or "").strip()
+                if not rules.norm_company(name):
+                    return self.send(400, {"error": "company required"})
+                rules.set_blocked(name, bool(b.get("blocked", True)), now())
+                n = refilter_company(c, name)
+                return self.send(200, {"ok": True, "jobs": n, "list": rules.blocked_list()})
             if method == "GET" and path == "/api/profile":   # 「我的」页：投递时要填的个人信息，存在本地库里（不进 git）
                 r = c.execute("SELECT value FROM kv WHERE key='profile'").fetchone()
                 return self.send(200, json.loads(r[0]) if r else DEFAULT_PROFILE)

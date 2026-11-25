@@ -1,9 +1,26 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "web", "runtimeExecutable": "python3", "runtimeArgs": ["web.py", "8765"], "port": 8765 },
-    { "name": "web-test", "runtimeExecutable": "env",
-      "runtimeArgs": ["AUTO_JOB_DB=/tmp/claude-1000/-home-ttm-auto-job/c01e6fcb-0cc0-4383-8a24-e1bfe896d0e5/scratchpad/swipe_test.db", "python3", "web.py", "8799"],
-      "port": 8799 }
+    {
+      "name": "web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "web.py",
+        "8765"
+      ],
+      "port": 8765
+    },
+    {
+      "name": "web-test",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "AUTO_JOB_DB=/tmp/claude-1000/-home-ttm-auto-job/c01e6fcb-0cc0-4383-8a24-e1bfe896d0e5/scratchpad/swipe_test.db",
+        "AUTO_JOB_BLOCKED=/tmp/claude-1000/-home-ttm-auto-job/c01e6fcb-0cc0-4383-8a24-e1bfe896d0e5/scratchpad/blocked_test.json",
+        "python3",
+        "web.py",
+        "8799"
+      ],
+      "port": 8799
+    }
   ]
 }
