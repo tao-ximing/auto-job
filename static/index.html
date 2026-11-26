@@ -157,10 +157,11 @@ textarea:focus, .field:focus { border-color: var(--accent); }
 /* 底部弹层：全屏滚动容器 = [透明垫片 100%] + [弹层]，用原生滚动吸附（scroll-snap）停在"打开 / 关闭"两个位置。
    往下拉 = 浏览器原生滚动（不经过页面 JS），跟手和惯性与系统滚动一样顺；滚到顶（弹层完全出屏）就收起。 */
 .scrim { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; }
+/* 关着时 display:none（不是 visibility:hidden）：iOS Safari 上隐藏的全屏滚动层仍可能吃掉触摸，整页点不动、划不动 */
 .sheet-wrap { position: fixed; inset: 0; z-index: 51; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain;
-  visibility: hidden; scrollbar-width: none; }
+  display: none; scrollbar-width: none; }
 .sheet-wrap::-webkit-scrollbar { display: none; }
-.sheet-wrap.open { visibility: visible; }
+.sheet-wrap.open { display: block; }
 .sheet-gap { height: 100%; scroll-snap-align: start; }
 .sheet { position: relative; scroll-snap-align: end; background: var(--panel); border-radius: 18px 18px 0 0;
   max-height: 85%; display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--shadow), 0 100vh 0 0 var(--panel); }   /* 第二个阴影：往上过拉回弹时下面不露空 */
@@ -327,7 +328,7 @@ function openSheet(html) {
   sh.innerHTML = '<div class="sheet-body"><div class="grab"></div>' + html + '</div>';
   sh.classList.add('open');
   clearTimeout(sheetTimer);
-  if (sheetState === 'closed') { w.classList.add('open'); w.scrollTop = 0; }
+  if (sheetState === 'closed') { w.classList.add('open'); void w.offsetHeight; w.scrollTop = 0; }   // 先让它排版出来再定位
   sheetState = 'opening';
   requestAnimationFrame(() => { if (sheetState === 'opening') w.scrollTo({ top: sheetMax(), behavior: 'smooth' }); });
   sheetTimer = setTimeout(() => { if (sheetState === 'opening') { w.scrollTop = sheetMax(); sheetState = 'open'; } }, 700);   // 兜底：平滑滚动没跑完（后台页等）就直接到位

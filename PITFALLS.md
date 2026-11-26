@@ -118,3 +118,4 @@ JS 跟手指（touchmove 里改 transform）几种调法在 iPhone 上都发涩�
 ## Gmail 同步：只有 404 才能当"已删除"跳过（2026-11-25）
 以前取单封邮件元数据时任何异常都当成已删除，一次超时就会让那封信永久漏掉（游标照样往前推）。
 现在只有 HTTP 404 跳过，其他错误直接抛出，这一轮不推进 historyId。测试见 test_rules.py 的 Robustness。
+- 弹层滚动层关闭时必须 `display:none`，不能只 `visibility:hidden`：iOS Safari 上隐藏的全屏滚动层可能仍吃掉触摸，整页点不动（2026-11-26，点开职位后整个 App 卡住）。
