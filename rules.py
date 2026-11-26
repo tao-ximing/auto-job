@@ -1,5 +1,5 @@
 """规范化、过滤规则（filters.toml）和去重打分。纯函数，不碰数据库，方便测试。"""
-import hashlib, json, os, re, tomllib
+import hashlib, json, os, re, sys, tempfile, threading, tomllib
 from functools import lru_cache
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -52,11 +52,16 @@ BLOCKED_PATH = os.environ.get("AUTO_JOB_BLOCKED") or os.path.join(HERE, "blocked
 _blocked_cache = (None, {})
 
 
-def blocked_list():
-    """[{name, at}]，按拉黑时间排。"""
+def blocked_list(strict=False):
+    """[{name, at}]，按拉黑时间排。文件坏了：strict 时报错（别拿空名单把它覆盖掉），否则打印警告当成空。"""
     try:
         return json.load(open(BLOCKED_PATH))
-    except (FileNotFoundError, ValueError):
+    except FileNotFoundError:
+        return []
+    except ValueError as e:
+        if strict:
+            raise RuntimeError(f"{BLOCKED_PATH} 内容损坏，先手动修好：{e}")
+        print(f"[rules] 拉黑名单读不了：{e}", file=sys.stderr)
         return []
 
 
@@ -72,13 +77,19 @@ def blocked():
     return _blocked_cache[1]
 
 
+_blocked_lock = threading.Lock()
+
+
 def set_blocked(name, on, at=None):
-    items = [b for b in blocked_list() if norm_company(b["name"]) != norm_company(name)]
-    if on:
-        items.append({"name": name.strip(), "at": at})
-    tmp = BLOCKED_PATH + ".tmp"
-    json.dump(items, open(tmp, "w"), ensure_ascii=False, indent=1)
-    os.replace(tmp, BLOCKED_PATH)
+    """读-改-写整段加锁（网页是多线程的），先写到独立临时文件再原子替换。"""
+    with _blocked_lock:
+        items = [b for b in blocked_list(strict=True) if norm_company(b["name"]) != norm_company(name)]
+        if on:
+            items.append({"name": name.strip(), "at": at})
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(BLOCKED_PATH), prefix=".blocked-", suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(items, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, BLOCKED_PATH)
 
 
 # ── 过滤规则 ──────────────────────────────────────────────────────────────

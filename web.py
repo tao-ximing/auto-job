@@ -144,7 +144,14 @@ def summary(c):
     return {"counts": counts, "views": views, "runs": runs, "pending_dups": dups, "unmatched_emails": unmatched, "statuses": STATUSES}
 
 
+class BadRequest(Exception):
+    pass
+
+
 class H(BaseHTTPRequestHandler):
+    timeout = 30            # 读请求的超时：连上了不发数据的连接不会一直占着线程
+    MAX_BODY = 256 * 1024   # 接口只收小 JSON
+
     def log_message(self, *a):
         pass
 
@@ -158,8 +165,10 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def body(self):
-        n = int(self.headers.get("content-length") or 0)
-        return json.loads(self.rfile.read(n) or b"{}")
+        n = self.headers.get("content-length") or "0"
+        if not n.isdigit() or int(n) > self.MAX_BODY:
+            raise BadRequest("请求体太大或长度不对")
+        return json.loads(self.rfile.read(int(n)) or b"{}")
 
     def route(self, method):
         from urllib.parse import urlparse, parse_qs
@@ -173,10 +182,15 @@ class H(BaseHTTPRequestHandler):
             name, ctype = STATIC[path]
             return self.send(200, open(os.path.join(HERE, "static", name), "rb").read(), ctype)
         # 只接受同源的写请求（本机 http://127.0.0.1:8765，或经 tailscale serve 的 https://…ts.net:8443）
+        # 浏览器发 POST 一定带 Origin；没有 Origin 或者不同源的一律拒绝（防别的网页借你的浏览器改数据）
         origin = self.headers.get("origin")
-        if method != "GET" and origin is not None and urlparse(origin).netloc != self.headers.get("host"):
+        if method != "GET" and (not origin or urlparse(origin).netloc != self.headers.get("host")
+                                or urlparse(origin).scheme not in ("http", "https")):
             return self.send(403, {"error": "cross-origin"})
-        c = connect()
+        try:
+            c = connect()
+        except Exception as e:
+            return self.send(503, {"error": f"数据库打不开：{e}"})
         try:
             if method == "GET" and path == "/api/summary":
                 return self.send(200, summary(c))
@@ -191,6 +205,9 @@ class H(BaseHTTPRequestHandler):
                 if action == "status":
                     if b.get("status") not in STATUSES:
                         return self.send(400, {"error": "bad status"})
+                    # 撤销等操作带上"期望的当前状态"：期间被邮件同步改过了就不覆盖
+                    if b.get("expect") and (c.execute("SELECT status FROM jobs WHERE id=?", (jid,)).fetchone() or [None])[0] != b["expect"]:
+                        return self.send(409, {"error": "状态已经被别处改过了", "job": job_detail(c, jid)})
                     c.execute("UPDATE jobs SET status=?, updated_at=? WHERE id=?", (b["status"], t, jid))
                     c.execute("INSERT INTO events (job_id, at, status, source, detail) VALUES (?,?,?,?,?)",
                               (jid, t, b["status"], "manual", b.get("detail") or None))
@@ -229,6 +246,8 @@ class H(BaseHTTPRequestHandler):
                     c.commit()
                     return self.send(200, {"ok": True})
                 jid = int(self.body()["job_id"])
+                if e["state"] == "matched" and e["job_id"] == jid:   # 重复点击：不重复写时间线
+                    return self.send(200, {"ok": True, "status": None, "job": jid})
                 new = gmail_sync.apply_email(c, m[1], jid, e["category"] or "other", e["subject"], source="manual")
                 c.execute("UPDATE emails SET match_reason='手动关联' WHERE id=?", (m[1],))
                 c.commit()
@@ -257,7 +276,7 @@ class H(BaseHTTPRequestHandler):
                                        "count": c.execute("SELECT count(*) FROM push_subscriptions").fetchone()[0]})
             if method == "POST" and path == "/api/push/subscribe":
                 b = self.body()
-                if not (b.get("endpoint", "").startswith("https://") and b.get("keys", {}).get("p256dh") and b["keys"].get("auth")):
+                if not (push.valid_endpoint(b.get("endpoint")) and b.get("keys", {}).get("p256dh") and b["keys"].get("auth")):
                     return self.send(400, {"error": "bad subscription"})
                 c.execute("""INSERT INTO push_subscriptions (endpoint, p256dh, auth, user_agent, created_at) VALUES (?,?,?,?,?)
                              ON CONFLICT (endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth""",
@@ -274,8 +293,14 @@ class H(BaseHTTPRequestHandler):
             if method == "POST" and path == "/api/dups":
                 b = self.body()
                 a, bb = sorted((int(b["a"]), int(b["b"])))
+                if a == bb or b.get("action") not in ("merge", "distinct"):
+                    return self.send(400, {"error": "bad request"})
+                if not c.execute("SELECT 1 FROM dup_candidates WHERE job_a=? AND job_b=? AND status='pending'", (a, bb)).fetchone():
+                    return self.send(409, {"error": "这对疑似重复已经处理过了"})
                 if b["action"] == "merge":
                     keep = int(b.get("keep") or a)
+                    if keep not in (a, bb):
+                        return self.send(400, {"error": "keep 必须是这两个职位之一"})
                     merge_jobs(c, keep, bb if keep == a else a)
                     c.commit()
                     return self.send(200, {"ok": True, "job": keep})
@@ -283,6 +308,9 @@ class H(BaseHTTPRequestHandler):
                 c.commit()
                 return self.send(200, {"ok": True})
             return self.send(404, {"error": "not found"})
+        except BadRequest as e:
+            c.rollback()
+            return self.send(400, {"error": str(e)})
         except Exception as e:
             c.rollback()
             return self.send(500, {"error": str(e)})

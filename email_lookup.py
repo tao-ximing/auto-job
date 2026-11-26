@@ -9,6 +9,7 @@
 单独运行（只搜不写库）:  python3 email_lookup.py "公司" "职位名" [seek|linkedin]
 """
 import re, sys, urllib.parse
+from datetime import datetime, timedelta, timezone
 import linkedin_guest as lg
 import rules, seek
 from db import now
@@ -97,8 +98,12 @@ def _hint(addr):
 def run(conn, ing, verbose=True):
     """处理所有还没补抓过的未归类邮件。返回 dict(tried, added, matched)。"""
     stats = {"tried": 0, "added": 0, "matched": 0}
+    # 只补抓有公司 + 职位名的邮件：只有公司名时搜出来同公司好几个职位，挑哪个都是瞎猜（会把拒信记到别的职位上），留给你手动关联。
+    # 上次出错（超时、5xx 等）的 6 小时后重试；确定搜不到的不再重试。
+    retry_before = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
     rows = conn.execute("""SELECT id, thread_id, from_addr, subject, category, company, title, body FROM emails
-                           WHERE state='unmatched' AND lookup_at IS NULL AND coalesce(company,'') != ''""").fetchall()
+                           WHERE state='unmatched' AND coalesce(company,'') != '' AND coalesce(title,'') != ''
+                             AND (lookup_at IS NULL OR (lookup_result LIKE '出错%' AND lookup_at < ?))""", (retry_before,)).fetchall()
     cache = {}   # 同一轮里同一个公司 + 职位只搜一次（中介 / 招聘方常常连发好几封）
     for e in rows:
         stats["tried"] += 1
@@ -110,10 +115,13 @@ def run(conn, ing, verbose=True):
         except lg.RateLimited as ex:
             print(f"[email-lookup] LinkedIn 限流（{ex}），剩下的下一轮再试", file=sys.stderr)
             break
-        except Exception as ex:   # 单封出错不影响其他邮件，也不再重试
+        except Exception as ex:   # 单封出错不影响其他邮件，6 小时后重试
             p, err = None, f"出错: {ex}"
         else:
             err = None
+        # 搜索要等网络，这期间你可能已经在网页上手动关联或忽略了这封邮件：那就不动它
+        if conn.execute("SELECT state FROM emails WHERE id=?", (e["id"],)).fetchone()["state"] != "unmatched":
+            continue
         result = None
         if not p and not err and e["title"]:
             # 两边都搜不到（职位已下架、没公开发布、或者是招聘方直接联系的）：用邮件本身建一个职位，链接指向这封邮件

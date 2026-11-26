@@ -7,8 +7,8 @@
 
   python3 gmail_sync.py          # 同步一次
 """
-import base64, html, re, sys, time
-from datetime import datetime
+import base64, html, re, sys, time, urllib.error
+from datetime import datetime, timezone
 import gmail, llm, rules
 from db import connect, now
 
@@ -195,9 +195,9 @@ RANK = {"new": 0, "shortlisted": 1, "skipped": 1, "closed": 1, "applied": 2, "as
 TARGET = {"applied": "applied", "assessment": "assessment", "interview": "interview", "offer": "offer", "rejected": "rejected"}
 
 
-def apply_email(conn, email_id, job_id, category, subject, source="email"):
-    """把邮件挂到职位上，按类别推进状态（只往前）。返回新状态或 None。"""
-    t = now()
+def apply_email(conn, email_id, job_id, category, subject, source="email", at=None):
+    """把邮件挂到职位上，按类别推进状态（只往前）。返回新状态或 None。at：事件时间（默认现在；同步时传收信时间）。"""
+    t = at or now()
     job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
         return None
@@ -250,9 +250,14 @@ def new_message_ids(conn):
             page = r.get("nextPageToken")
             if not page:
                 break
-    except Exception as e:  # historyId 太旧（404）：退回按时间拉最近 2 天
-        print(f"[gmail] history 失效（{e}），改拉最近 2 天", file=sys.stderr)
-        return _list_query("newer_than:2d"), gmail.get("profile")["historyId"]
+    except urllib.error.HTTPError as e:  # 只有 historyId 太旧（404）才退回按时间拉；超时、限流等直接抛出，游标不动，下次重试
+        if e.code != 404:
+            raise
+        hid = gmail.get("profile")["historyId"]   # 先取游标再列表：两步之间到的信下次还会出现在 history 里
+        last = _kv(conn, "gmail_last_ok")
+        days = 2 if not last else max(2, int((time.time() - float(last)) / 86400) + 2)
+        print(f"[gmail] history 失效，改拉最近 {days} 天", file=sys.stderr)
+        return _list_query(f"newer_than:{days}d"), hid
     return list(dict.fromkeys(ids)), latest
 
 
@@ -261,8 +266,10 @@ def process_message(conn, mid, stats, verbose=True):
     try:
         meta = gmail.get(f"messages/{mid}", format="metadata",
                          metadataHeaders=["From", "Subject", "List-Unsubscribe", "List-Id", "Precedence", "Auto-Submitted"])
-    except Exception:
-        return  # 已删除的邮件
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return  # 已删除的邮件
+        raise       # 超时 / 限流 / 授权问题：抛出去，这轮不推进 historyId，下次重试
     if "SENT" in meta.get("labelIds", []) or "DRAFT" in meta.get("labelIds", []):
         return
     h = {x["name"]: x["value"] for x in meta["payload"]["headers"]}
@@ -288,7 +295,11 @@ def process_message(conn, mid, stats, verbose=True):
                 title = title or g.get("title") or None
     name, addr = (re.match(r'\s*"?([^"<]*?)"?\s*<([^>]+)>', sender) or re.match(r"()(.*)", sender)).groups()
     received = datetime.fromtimestamp(int(msg["internalDate"]) / 1000).astimezone().isoformat(timespec="seconds")
+    received_utc = datetime.fromtimestamp(int(msg["internalDate"]) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     state = "ignored" if category == "ignore" else "unmatched"
+    if state == "ignored":   # 和求职无关：只留 ID 防止重复处理，正文、摘要、发件人都不存
+        name = addr = subject = body = None
+        msg = {**msg, "snippet": ""}
     conn.execute("""INSERT OR IGNORE INTO emails (id, thread_id, received_at, from_addr, from_name, subject, snippet, body, category,
                     company, title, state, classified_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                  (mid, msg["threadId"], received, addr, name, subject, html.unescape(msg.get("snippet", "")), body,
@@ -300,7 +311,7 @@ def process_message(conn, mid, stats, verbose=True):
     job_id, reason = match_job(conn, company, title, category or "other")
     conn.execute("UPDATE emails SET match_reason=? WHERE id=?", (reason, mid))
     if job_id:
-        apply_email(conn, mid, job_id, category or "other", subject)
+        apply_email(conn, mid, job_id, category or "other", subject, at=received_utc)
         stats["matched"] += 1
     else:
         stats["unmatched"] += 1
@@ -322,6 +333,7 @@ def sync(conn, verbose=True):
         stats["seen"] += 1
         process_message(conn, mid, stats, verbose)
     _kv(conn, "gmail_history_id", latest)
+    _kv(conn, "gmail_last_ok", time.time())
     conn.commit()
     return stats
 

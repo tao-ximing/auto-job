@@ -15,9 +15,10 @@ key = f"failure_push:{unit}"
 r = conn.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
 if r and time.time() - float(r[0]) < 3600:
     sys.exit(0)
-conn.execute("INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", (key, str(time.time())))
-conn.commit()
 log = subprocess.run(["journalctl", "--user", "-u", unit, "-n", "40", "--no-pager", "-o", "cat"],
                      capture_output=True, text=True).stdout.splitlines()
 last = next((l.strip() for l in reversed(log) if re.search(r"Error|Exception|出错|失败|限流", l)), None)
-push.send_all(conn, f"抓取崩溃：{unit}", last or f"运行 journalctl --user -u {unit} 查看", urgency="high")
+ok, _ = push.send_all(conn, f"抓取崩溃：{unit}", last or f"运行 journalctl --user -u {unit} 查看", urgency="high")
+if ok:   # 至少一台手机收到了才开始一小时冷却；没送达的话下次失败还会再试
+    conn.execute("INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT (key) DO UPDATE SET value=excluded.value", (key, str(time.time())))
+    conn.commit()

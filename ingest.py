@@ -34,7 +34,19 @@ class Ingestor:
 
     # ── 主入口 ──
     def add(self, p):
-        """返回 'new' 或 'seen'。"""
+        """返回 'new' 或 'seen'。一条帖子的所有写入在一个保存点里：中途出错整条撤回再抛出，
+        不会留下没挂到 job 上的 posting（下轮按 source_id 会当成"已见"，再也挂不回去）。"""
+        self.conn.execute("SAVEPOINT add_posting")
+        try:
+            r = self._add(p)
+        except BaseException:
+            self.conn.execute("ROLLBACK TO add_posting"); self.conn.execute("RELEASE add_posting")
+            self._cache = None   # 缓存可能已经记了撤回的东西，或者 job 被网页合并删掉了
+            raise
+        self.conn.execute("RELEASE add_posting")
+        return r
+
+    def _add(self, p):
         t = now()
         c = self.conn
         row = c.execute("SELECT * FROM postings WHERE source=? AND source_id=?", (p["source"], str(p["source_id"]))).fetchone()
@@ -44,9 +56,10 @@ class Ingestor:
             changed_jd = p.get("description") and rules.jd_hash(p["description"]) != row["jd_hash"]
             if changed_jd:
                 fields |= {"description": p["description"], "jd_hash": rules.jd_hash(p["description"])}
+            changed_meta = any(k in fields and fields[k] != row[k] for k in ("title", "company", "location"))
             sets = ", ".join(f"{k}=?" for k in fields)
             c.execute(f"UPDATE postings SET last_seen=?{', ' + sets if sets else ''} WHERE id=?", (t, *fields.values(), pid))
-            if changed_jd:
+            if changed_jd or changed_meta:
                 self._apply_filters(pid, {**dict(row), **fields})
                 self._refresh_job(row["job_id"])
             self._hit(pid, p["search"], t)
@@ -83,6 +96,9 @@ class Ingestor:
     def _attach(self, pid, p):
         """找已有的 job：能确定是同一个就挂上去，拿不准就新建 job 并记一条疑似重复。"""
         cache = self._load_cache()
+        live = {r[0] for r in self.conn.execute("SELECT id FROM jobs")}
+        for gone in [j for j in cache if j not in live]:   # 抓取期间网页上合并删掉的 job
+            del cache[gone]
         sig = self._sig(p.get("company"), p.get("title"), p.get("description"))
         best, candidates = None, []
         for job_id, sigs in cache.items():
@@ -138,8 +154,9 @@ def merge_jobs(conn, keep, drop):
     if keep == drop:
         return
     t = now()
-    for table in ("postings", "events", "application_qa"):
+    for table in ("postings", "events", "application_qa", "emails"):
         conn.execute(f"UPDATE {table} SET job_id=? WHERE job_id=?", (keep, drop))
+    conn.execute("DELETE FROM job_vectors WHERE job_id IN (?,?)", (keep, drop))   # 合并后 JD 可能变了，下轮重算
     k, d = conn.execute("SELECT * FROM jobs WHERE id=?", (keep,)).fetchone(), conn.execute("SELECT * FROM jobs WHERE id=?", (drop,)).fetchone()
     # 状态保留更"往前走"的那个（比如一个已经 applied，另一个还是 new）
     order = {s: i for i, s in enumerate(["new", "shortlisted", "skipped", "closed", "applied", "assessment", "interview", "rejected", "offer"])}
@@ -187,18 +204,28 @@ def rebuild(conn):
     """改了过滤规则或去重阈值之后，从头重算所有 posting 的过滤结果和归属。有手动操作过的记录时拒绝执行，免得丢状态。"""
     if conn.execute("SELECT 1 FROM events WHERE source != 'auto' LIMIT 1").fetchone() or \
        conn.execute("SELECT 1 FROM application_qa LIMIT 1").fetchone() or \
-       conn.execute("SELECT 1 FROM jobs WHERE status != 'new' OR notes != '' OR filter_override LIMIT 1").fetchone():
-        raise SystemExit("库里已经有手动改过的状态/问答/备注，不能整体重建")
-    rows = [dict(r) for r in conn.execute("SELECT * FROM postings ORDER BY first_seen, id")]
-    conn.executescript("UPDATE postings SET job_id=NULL; DELETE FROM dup_candidates; DELETE FROM events; DELETE FROM jobs;")
-    ing = Ingestor(conn)
-    ing._cache = {}
-    for r in rows:
-        ing._apply_filters(r["id"], r)
-        h = conn.execute("SELECT search FROM search_hits WHERE posting_id=? ORDER BY first_seen LIMIT 1", (r["id"],)).fetchone()
-        r["search"] = h[0] if h else None
-        ing._attach(r["id"], r)
+       conn.execute("SELECT 1 FROM jobs WHERE status != 'new' OR notes != '' OR filter_override LIMIT 1").fetchone() or \
+       conn.execute("SELECT 1 FROM dup_candidates WHERE status != 'pending' LIMIT 1").fetchone() or \
+       conn.execute("SELECT 1 FROM emails WHERE job_id IS NOT NULL LIMIT 1").fetchone():
+        raise SystemExit("库里已经有手动改过的状态/问答/备注/去重判定/关联邮件，不能整体重建")
     conn.commit()
+    try:
+        conn.execute("BEGIN IMMEDIATE")   # 不用 executescript：它会先自动提交，出错就回不去了
+        rows = [dict(r) for r in conn.execute("SELECT * FROM postings ORDER BY first_seen, id")]
+        for sql in ("UPDATE postings SET job_id=NULL", "DELETE FROM dup_candidates", "DELETE FROM events",
+                    "DELETE FROM job_vectors", "DELETE FROM jobs"):
+            conn.execute(sql)
+        ing = Ingestor(conn)
+        ing._cache = {}
+        for r in rows:
+            ing._apply_filters(r["id"], r)
+            h = conn.execute("SELECT search FROM search_hits WHERE posting_id=? ORDER BY first_seen LIMIT 1", (r["id"],)).fetchone()
+            r["search"] = h[0] if h else None
+            ing._attach(r["id"], r)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
 
 
 if __name__ == "__main__":

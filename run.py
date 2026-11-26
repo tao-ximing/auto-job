@@ -154,10 +154,13 @@ def gmail_poll():
     if lock is None:          # 每小时那一轮正在同步
         return
     conn = connect()
-    ids, _ = gmail_sync.new_message_ids(conn)
-    lock.close()              # run_gmail 会自己再拿锁
-    if not ids:
+    ids, latest = gmail_sync.new_message_ids(conn)
+    known = {r[0] for r in conn.execute("SELECT id FROM emails")}
+    if not [i for i in ids if i not in known]:   # 没有新邮件：游标也往前挪，免得每分钟重扫同一段历史
+        gmail_sync._kv(conn, "gmail_history_id", latest); conn.commit()
+        lock.close()
         return
+    lock.close()              # run_gmail 会自己再拿锁
     t0 = now()
     mail = run_gmail(conn)
     if mail:

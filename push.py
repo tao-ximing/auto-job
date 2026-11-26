@@ -101,19 +101,31 @@ def send_one(sub, message: dict, ttl=86400, urgency="normal"):
 def send_all(conn, title, body, url="/", urgency="normal"):
     """给所有订阅发；失效的订阅删掉。返回 (成功数, 总数)。"""
     subs = [dict(r) for r in conn.execute("SELECT endpoint, p256dh, auth FROM push_subscriptions")]
-    ok = 0
-    for s in subs:
+    ok, gone = 0, []
+    for s in subs:   # 网络请求期间不碰数据库，免得一直占着写锁
         try:
             code = send_one(s, {"title": title, "body": body, "url": url}, urgency=urgency)
         except Exception as e:
             print(f"[push] 发送失败: {e}", file=sys.stderr)
             continue
         if code in (404, 410):
-            conn.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (s["endpoint"],))
+            gone.append(s["endpoint"])
         elif 200 <= code < 300:
             ok += 1
-    conn.commit()
+    if gone:
+        conn.executemany("DELETE FROM push_subscriptions WHERE endpoint=?", [(e,) for e in gone])
+        conn.commit()
     return ok, len(subs)
+
+
+# 只接受浏览器厂商的推送服务地址，别让人登记任意 URL（服务器会往那里发请求）
+PUSH_HOSTS = ("fcm.googleapis.com", ".push.apple.com", ".push.services.mozilla.com", ".notify.windows.com")
+
+
+def valid_endpoint(url):
+    u = urllib.parse.urlparse(url or "")
+    h = (u.hostname or "").lower()
+    return u.scheme == "https" and any(h == p.lstrip(".") or h.endswith(p) if p.startswith(".") else h == p for p in PUSH_HOSTS)
 
 
 if __name__ == "__main__":

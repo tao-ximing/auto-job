@@ -154,11 +154,18 @@ textarea:focus, .field:focus { border-color: var(--accent); }
 .actions button:active { opacity: .7; }
 
 /* ── 底部弹层 / 提示 ── */
-.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; transition: opacity .2s; }
-.scrim.open { opacity: 1; pointer-events: auto; }
-.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--panel); border-radius: 18px 18px 0 0; padding: 8px 16px calc(16px + var(--safe-b));
-  transform: translateY(105%); transition: transform .25s cubic-bezier(.2,.8,.2,1); max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow); }
-.sheet.open { transform: none; }
+/* 底部弹层：全屏滚动容器 = [透明垫片 100%] + [弹层]，用原生滚动吸附（scroll-snap）停在"打开 / 关闭"两个位置。
+   往下拉 = 浏览器原生滚动（不经过页面 JS），跟手和惯性与系统滚动一样顺；滚到顶（弹层完全出屏）就收起。 */
+.scrim { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none; }
+.sheet-wrap { position: fixed; inset: 0; z-index: 51; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain;
+  visibility: hidden; scrollbar-width: none; }
+.sheet-wrap::-webkit-scrollbar { display: none; }
+.sheet-wrap.open { visibility: visible; }
+.sheet-gap { height: 100%; scroll-snap-align: start; }
+.sheet { position: relative; scroll-snap-align: end; background: var(--panel); border-radius: 18px 18px 0 0;
+  max-height: 85%; display: flex; flex-direction: column; overflow: hidden; box-shadow: var(--shadow), 0 100vh 0 0 var(--panel); }   /* 第二个阴影：往上过拉回弹时下面不露空 */
+/* 外框只负责圆角裁剪，里面的 .sheet-body 负责滚动：外框自己滚动时，内容在嵌套滚动下会露到圆角外面 */
+.sheet-body { overflow-y: auto; min-height: 0; padding: 8px 16px calc(16px + var(--safe-b)); }
 .sheet .grab { width: 36px; height: 5px; border-radius: 3px; background: var(--line); margin: 0 auto 12px; }
 .sheet h4 { margin: 0 0 4px; font-size: 17px; }
 .sheet p { margin: 0 0 12px; color: var(--muted); font-size: 14px; }
@@ -198,8 +205,7 @@ textarea:focus, .field:focus { border-color: var(--accent); }
   .actions { position: absolute; }
   .toast { left: auto; right: 24px; width: 380px; bottom: 24px; }
   .detail-open .toast { bottom: 24px; }
-  .sheet { left: 50%; right: auto; width: 440px; transform: translate(-50%, calc(100% + 48px)); border-radius: 18px; bottom: 24px; }  /* 要多移 bottom + 阴影的距离，否则矮的弹层会露出一截 */
-  .sheet.open { transform: translate(-50%, 0); }
+  .sheet { width: 440px; margin: 0 auto 24px; scroll-margin-bottom: 24px; border-radius: 18px; box-shadow: var(--shadow); }
 }
 </style>
 </head>
@@ -234,7 +240,7 @@ textarea:focus, .field:focus { border-color: var(--accent); }
     </section>
   </main>
   <div class="scrim" id="scrim"></div>
-  <div class="sheet" id="sheet"></div>
+  <div class="sheet-wrap" id="sheetWrap"><div class="sheet-gap" id="sheetGap"></div><div class="sheet" id="sheet"></div></div>
   <div class="toast" id="toast"><span class="msg"></span><button hidden></button></div>
 </div>
 <script>
@@ -274,10 +280,11 @@ function lsGet(k) { try { return localStorage.getItem(k); } catch { return null;
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeUrl = u => /^https:\/\//i.test(u || '') ? u : '#';   // 职位链接只放行 https
 async function api(path, body) {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) { toast(d.error || `出错了（${r.status}）`); throw new Error(d.error); }
+  if (!r.ok) { toast(d.error || `出错了（${r.status}）`); throw Object.assign(new Error(d.error), { status: r.status, data: d }); }
   return d;
 }
 function ago(ts) {
@@ -308,43 +315,37 @@ function toast(msg, actionLabel, onAction) {
 }
 
 // ── 底部弹层 ──
-function openSheet(html) {
-  $('sheet').innerHTML = '<div class="grab"></div>' + html;
-  $('sheet').classList.add('open'); $('scrim').classList.add('open');
+// sheetState: closed → opening → open → closing → closed。#sheet 的 .open 类和以前一样表示"弹层在用"，别处靠它判断。
+let sheetState = 'closed', sheetTimer = 0;
+const sheetMax = () => $('sheetWrap').scrollHeight - $('sheetWrap').clientHeight;
+function sheetDone() {   // 真正收起
+  clearTimeout(sheetTimer); sheetState = 'closed';
+  $('sheetWrap').classList.remove('open'); $('sheet').classList.remove('open'); $('scrim').style.opacity = 0;
 }
-function closeSheet() { $('sheet').classList.remove('open'); $('scrim').classList.remove('open'); }
-$('scrim').addEventListener('click', closeSheet);
-// 弹层往下拖关掉（手机）：弹层内容已经滚到顶时往下拖才算；拖过 80px 或者快速一甩就关
-(() => {
-  const sh = $('sheet');
-  let y0 = null, t0 = 0, dy = 0, drag = false;
-  const at = d => isDesktop() ? `translate(-50%, ${d}px)` : `translateY(${d}px)`;
-  sh.addEventListener('touchstart', e => {
-    if (e.target.closest('textarea, input, select')) { y0 = null; return; }
-    y0 = e.touches[0].clientY; t0 = Date.now(); dy = 0; drag = false;
-  }, { passive: true });
-  sh.addEventListener('touchmove', e => {
-    if (y0 == null) return;
-    dy = e.touches[0].clientY - y0;
-    if (!drag) {
-      if (dy < 0 || sh.scrollTop > 0) { y0 = null; return; }   // 往上滑 / 内容没在顶部：正常滚动
-      if (dy < 6) return;
-      drag = true;
-    }
-    e.preventDefault();
-    sh.style.transition = 'none'; sh.style.transform = at(Math.max(0, dy));
-  }, { passive: false });
-  const end = () => {
-    if (y0 == null) return;
-    y0 = null;
-    if (!drag) return;
-    const fast = dy > 30 && dy / Math.max(Date.now() - t0, 1) > 0.5;
-    sh.style.transition = ''; sh.style.transform = '';
-    if (dy > 80 || fast) closeSheet();
-  };
-  sh.addEventListener('touchend', end);
-  sh.addEventListener('touchcancel', () => { dy = 0; end(); });
-})();
+function openSheet(html) {
+  const w = $('sheetWrap'), sh = $('sheet');
+  sh.innerHTML = '<div class="sheet-body"><div class="grab"></div>' + html + '</div>';
+  sh.classList.add('open');
+  clearTimeout(sheetTimer);
+  if (sheetState === 'closed') { w.classList.add('open'); w.scrollTop = 0; }
+  sheetState = 'opening';
+  requestAnimationFrame(() => { if (sheetState === 'opening') w.scrollTo({ top: sheetMax(), behavior: 'smooth' }); });
+  sheetTimer = setTimeout(() => { if (sheetState === 'opening') { w.scrollTop = sheetMax(); sheetState = 'open'; } }, 700);   // 兜底：平滑滚动没跑完（后台页等）就直接到位
+}
+function closeSheet() {
+  if (sheetState === 'closed') return;
+  sheetState = 'closing'; $('sheet').classList.remove('open');
+  $('sheetWrap').scrollTo({ top: 0, behavior: 'smooth' });
+  clearTimeout(sheetTimer); sheetTimer = setTimeout(() => { if (sheetState === 'closing') sheetDone(); }, 700);
+}
+$('sheetWrap').addEventListener('scroll', () => {
+  const w = $('sheetWrap'), max = sheetMax();
+  $('scrim').style.opacity = max > 0 ? Math.min(1, w.scrollTop / max) : 0;   // 遮罩跟着弹层露出的比例变
+  if (sheetState === 'opening' && w.scrollTop >= max - 1) sheetState = 'open';
+  else if (sheetState === 'open' && w.scrollTop <= 1) sheetDone();          // 手指拉到底 / 吸附到关闭位置
+  else if (sheetState === 'closing' && w.scrollTop <= 1) sheetDone();
+}, { passive: true });
+$('sheetGap').addEventListener('click', closeSheet);   // 点弹层外面
 
 // ── 数据 ──
 async function loadSummary() {
@@ -354,14 +355,19 @@ async function loadSummary() {
   $('menuBtn').classList.toggle('dot', !!s.unmatched_emails);
   const errs = s.runs.filter(r => r.error);
   $('banner').hidden = !errs.length;
-  $('banner').innerHTML = errs.map(r => `<b>${SRC[r.source] || r.source}</b>：${esc(r.error.trim().split('\n').pop())}`).join('<br>');
+  $('banner').innerHTML = errs.map(r => `<b>${esc(SRC[r.source] || r.source)}</b>：${esc(r.error.trim().split('\n').pop())}`).join('<br>');
 }
+let listSeq = 0;
+const pendingSkip = new Set();
 async function loadList() {
   if (state.view === 'me') return loadProfile();
   const p = new URLSearchParams({ view: state.view });   // 只搜当前页
   if (state.q) p.set('q', state.q);
   if (state.source) p.set('source', state.source);
-  state.jobs = await api('/api/jobs?' + p);
+  const seq = ++listSeq;
+  const jobs = await api('/api/jobs?' + p);
+  if (seq !== listSeq) return;
+  state.jobs = jobs.filter(j => !pendingSkip.has(j.id));   // 正在提交"不投"的别画回来
   $('viewTitle').textContent = state.q ? `${TITLES[state.view]} · 搜索` : TITLES[state.view];
   renderList();
 }
@@ -443,10 +449,14 @@ async function saveProfile(items) {
 }
 
 // ── 详情 ──
+let detailSeq = 0;
+const curId = () => state.job?.job.id;   // 详情里的操作一律作用到屏幕上显示的这个职位
 async function openJob(id) {
   state.sel = id;
   document.querySelectorAll('.card').forEach(c => c.classList.toggle('sel', Number(c.dataset.id) === id));
+  const seq = ++detailSeq;
   const d = await api('/api/jobs/' + id);
+  if (seq !== detailSeq) return;   // 期间又点了别的职位：这个响应过期了
   renderDetail(d);
   $('detail').classList.add('open'); $('detail').setAttribute('aria-hidden', 'false');
   document.body.classList.add('detail-open');
@@ -458,7 +468,7 @@ function closeDetail(fromPop) {
   if (!fromPop && !isDesktop() && history.state?.detail) history.back();
   if (!isDesktop()) { state.sel = null; document.querySelectorAll('.card.sel').forEach(c => c.classList.remove('sel')); }
 }
-window.addEventListener('popstate', () => { if ($('detail').classList.contains('open')) closeDetail(true); });
+window.addEventListener('popstate', () => { closeSheet(); if ($('detail').classList.contains('open')) closeDetail(true); });
 $('backBtn').addEventListener('click', () => closeDetail());
 
 function renderDetail(d, keepScroll) {
@@ -480,7 +490,7 @@ function renderDetail(d, keepScroll) {
     <div class="d-sub">${esc(j.company)} · ${esc(j.location || '')}</div>
     <div class="chips" style="margin-top:8px"><span class="chip st">${STATUS[j.status]}</span>${ex.easy_apply ? '<span class="chip ok">Easy Apply</span>' : ''}${tagChips(filters)}</div>
     <div class="facts">${facts.map(([k, v]) => `<div class="fact"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
-    <div class="links">${d.postings.map(p => `<a class="link-btn" href="${esc(p.url)}" target="_blank" rel="noopener">
+    <div class="links">${d.postings.map(p => `<a class="link-btn" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">
       <span class="src">在 ${SRC[p.source]} 打开</span><span class="sm">${esc(p.company)}${p.is_agency ? '（中介）' : ''}</span>${ICON.ext}</a>`).join('')}</div>
 
     ${rejects.length || j.filter_override ? `<div class="sec warn">
@@ -510,7 +520,7 @@ function renderDetail(d, keepScroll) {
     <div class="sec"><h3>备注</h3><textarea id="notes" rows="3" placeholder="自己的备注，离开输入框自动保存">${esc(j.notes)}</textarea></div>
 
     <div class="sec"><h3>时间线</h3>
-      <ul class="timeline">${d.events.map(e => `<li><span class="when">${fmt(e.at)}</span><span>${e.status ? `<span class="chip st">${STATUS[e.status] || e.status}</span> ` : ''}${esc(e.detail || '')}</span></li>`).join('')}</ul>
+      <ul class="timeline">${d.events.map(e => `<li><span class="when">${fmt(e.at)}</span><span>${e.status ? `<span class="chip st">${esc(STATUS[e.status] || e.status)}</span> ` : ''}${esc(e.detail || '')}</span></li>`).join('')}</ul>
       <div class="d-sub" style="font-size:12px;margin-top:8px">命中的搜索：${esc([...new Set(d.postings.flatMap(p => p.searches))].join('、'))}</div>
     </div>`;
   body.scrollTop = keepScroll ? top : 0;
@@ -526,14 +536,14 @@ $('dBody').addEventListener('scroll', () => $('dHead').classList.toggle('scrolle
 async function saveNotes() {
   const v = $('notes')?.value ?? '';
   if (!state.job || v === state.job.job.notes) return;
-  const d = await api(`/api/jobs/${state.sel}/notes`, { notes: v });
+  const d = await api(`/api/jobs/${state.job.job.id}/notes`, { notes: v });
   state.job = d;
   toast('备注已保存');
 }
 
 // ── 改状态：提示 + 撤销 + 移出当前列表就回到列表 ──
 async function setStatus(status, opts = {}) {
-  const id = state.sel, prev = state.job.job.status;
+  const id = curId(), prev = state.job.job.status;
   if (status === prev) return;
   const d = await api(`/api/jobs/${id}/status`, { status, detail: opts.detail });
   const leaves = !['filtered', 'all'].includes(state.view) && VIEW_OF(status) !== state.view;
@@ -547,7 +557,8 @@ async function setStatus(status, opts = {}) {
   if (opts.silent) return;
   const where = leaves ? `，已移到「${TITLES[VIEW_OF(status)]}」` : '';
   toast(`已标记为「${STATUS[status]}」${where}`, '撤销', async () => {
-    await api(`/api/jobs/${id}/status`, { status: prev, detail: '撤销' });
+    try { await api(`/api/jobs/${id}/status`, { status: prev, detail: '撤销', expect: status }); }
+    catch (e) { if (e.status === 409) { loadSummary(); loadList(); } return; }   // 期间被邮件同步改过了，不覆盖
     await Promise.all([loadSummary(), loadList()]);
     if (state.sel === id || isDesktop()) openJob(id);
     toast(`已恢复为「${STATUS[prev]}」`);
@@ -571,7 +582,7 @@ function qaSheet(id, afterApply) {
 }
 function menuSheet() {
   const s = state.summary || { runs: [], pending_dups: 0 };
-  const runs = s.runs.map(r => `<div class="d-sub" style="padding:4px 0">${SRC[r.source] || (r.source === 'gmail' ? 'Gmail' : r.source)}：上次 ${ago(r.finished_at || r.started_at)}，新增 ${r.new}${r.error ? ' · <b style="color:var(--bad-ink)">出错</b>' : ''}</div>`).join('');
+  const runs = s.runs.map(r => `<div class="d-sub" style="padding:4px 0">${esc(SRC[r.source] || (r.source === 'gmail' ? 'Gmail' : r.source))}：上次 ${ago(r.finished_at || r.started_at)}，新增 ${r.new}${r.error ? ' · <b style="color:var(--bad-ink)">出错</b>' : ''}</div>`).join('');
   openSheet(`<h4>设置</h4>
     <div class="sheet-list">
       <button data-act="push" id="pushRow"><span>${pushLabel()}</span><span class="sm">${pushHint()}</span></button>
@@ -596,13 +607,16 @@ async function mailsSheet(quiet) {
         <button class="btn" data-mail-ignore="${m.id}">忽略</button>
         <a class="btn" href="${gmailUrl(m.thread_id)}" target="_blank" rel="noopener">打开邮件</a></div></div>`).join('')}`);
 }
+let pickSeq = 0;
 async function pickJobSheet(mailId, q) {
   openSheet(`<h4>关联到哪个职位？</h4><input class="field" id="pick-q" placeholder="搜索职位 / 公司" value="${esc(q)}" style="margin-bottom:8px">
     <div class="sheet-list" id="pick-list"></div>`);
+  const seq = ++pickSeq;
   const run = async () => {
-    const v = $('pick-q').value.trim();
+    const v = $('pick-q')?.value.trim() ?? '';
     const jobs = await api('/api/jobs?view=all' + (v ? '&q=' + encodeURIComponent(v) : ''));
-    $('pick-list').innerHTML = jobs.slice(0, 30).map(j => `<button data-pick-job="${j.id}" data-mail="${mailId}"><span>${esc(j.title)}<br><span class="sm">${esc(j.company)} · ${STATUS[j.status]}</span></span></button>`).join('')
+    if (seq !== pickSeq || !$('pick-list')) return;   // 弹层已经关了 / 换成别的邮件了
+    $('pick-list').innerHTML = jobs.slice(0, 30).map(j => `<button data-pick-job="${j.id}" data-mail="${esc(mailId)}"><span>${esc(j.title)}<br><span class="sm">${esc(j.company)} · ${STATUS[j.status]}</span></span></button>`).join('')
       || '<div class="d-sub" style="padding:12px 0">没有找到。库里可能没有这个职位（比如不是通过 SEEK / LinkedIn 搜到的）。</div>';
   };
   let t; $('pick-q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(run, 300); });
@@ -676,21 +690,21 @@ document.addEventListener('click', async e => {
   if (t.dataset.delqa) {
     if (!confirm('删除这条问答？')) return;
     await api(`/api/qa/${t.dataset.delqa}/delete`, {});
-    return renderDetail(await api('/api/jobs/' + state.sel), true);
+    return renderDetail(await api('/api/jobs/' + curId()), true);
   }
   if (t.dataset.dup) {
-    const r = await api('/api/dups', { a: state.sel, b: t.dataset.b, action: t.dataset.dup, keep: state.sel });
+    const r = await api('/api/dups', { a: curId(), b: t.dataset.b, action: t.dataset.dup, keep: curId() });
     toast(t.dataset.dup === 'merge' ? '已合并' : '已标记为不是同一个');
     await Promise.all([loadSummary(), loadList()]);
-    return renderDetail(await api('/api/jobs/' + (r.job || state.sel)), true);
+    return renderDetail(await api('/api/jobs/' + (r.job || curId())), true);
   }
   switch (t.dataset.act) {
     case 'more': return moreSheet();
     case 'sheet-close': return closeSheet();
-    case 'qa-open': return qaSheet(state.sel, false);
+    case 'qa-open': return qaSheet(curId(), false);
     case 'jd': { const jd = $('jd'); jd.classList.toggle('open'); t.textContent = jd.classList.contains('open') ? '收起' : '展开全部'; return; }
     case 'override': {
-      const d = await api(`/api/jobs/${state.sel}/override`, { value: Number(t.dataset.v) });
+      const d = await api(`/api/jobs/${curId()}/override`, { value: Number(t.dataset.v) });
       renderDetail(d, true); toast(Number(t.dataset.v) ? '已放行，移到待处理' : '已取消放行');
       return Promise.all([loadSummary(), loadList()]);
     }
@@ -733,11 +747,15 @@ setInterval(() => {
 async function quickSkip(id) {
   const job = state.jobs.find(j => j.id === id);
   const prev = job ? job.status : 'new';
-  await api(`/api/jobs/${id}/status`, { status: 'skipped', detail: '左滑' });
+  pendingSkip.add(id);
+  try { await api(`/api/jobs/${id}/status`, { status: 'skipped', detail: '左滑', expect: prev }); }
+  catch { pendingSkip.delete(id); loadSummary(); loadList(); return; }   // 没提交成功：卡片画回来（api 已经提示了错误）
+  pendingSkip.delete(id);
   if (state.sel === id && !isDesktop()) closeDetail();
   setTimeout(() => { loadSummary(); loadList(); }, 220);
   toast('已标记为「不投」', '撤销', async () => {
-    await api(`/api/jobs/${id}/status`, { status: prev, detail: '撤销' });
+    try { await api(`/api/jobs/${id}/status`, { status: prev, detail: '撤销', expect: 'skipped' }); }
+    catch (e) { if (e.status === 409) { loadSummary(); loadList(); } return; }
     await Promise.all([loadSummary(), loadList()]);
     toast(`已恢复为「${STATUS[prev]}」`);
   });

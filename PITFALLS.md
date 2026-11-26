@@ -106,3 +106,15 @@
 左滑不投后 220ms 会重绘列表。如果这时手指正在滑下一张卡，那张卡的 DOM 被换掉，`touchend` 发到已脱离页面的节点上、冒泡不到列表，
 结果卡片停在半路、这次不投也没发出去。现在手指按着时 `renderList` 只记一笔，松手后再画；`touchcancel` 也会把卡片弹回原位。
 
+
+## 底部弹层用原生滚动吸附做，不用 JS 跟手指（2026-11-25）
+JS 跟手指（touchmove 里改 transform）几种调法在 iPhone 上都发涩：每一帧都要等主线程，Safari 网页还限 60 帧。
+现在弹层放进全屏滚动容器 `#sheetWrap` = [透明垫片 100%] + [弹层]，`scroll-snap-type: y mandatory` 只有"打开 / 关闭"两个吸附点，
+往下拉就是浏览器原生滚动（跟手、惯性、松手吸附都不经过页面 JS），滚到顶就收起。
+- 弹层外框负责圆角裁剪（overflow: hidden），里面 `.sheet-body` 负责滚动。外框自己滚动时，内容在嵌套滚动下会露到圆角外面。
+- 长内容先滚 `.sheet-body`，滚到顶后继续往下拉会自动接力到外层，把弹层拉下来。
+- 无界面 Chrome 里 `Input.synthesizeScrollGesture` 不触发滚动；要测手势，用 CDP `Input.dispatchTouchEvent` 一步步发 touchStart/Move/End。
+
+## Gmail 同步：只有 404 才能当"已删除"跳过（2026-11-25）
+以前取单封邮件元数据时任何异常都当成已删除，一次超时就会让那封信永久漏掉（游标照样往前推）。
+现在只有 HTTP 404 跳过，其他错误直接抛出，这一轮不推进 historyId。测试见 test_rules.py 的 Robustness。
