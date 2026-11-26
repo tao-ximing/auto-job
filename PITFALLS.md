@@ -90,6 +90,7 @@
 - **补处理漏掉的邮件时别用 newer_than:7d**：会把跟踪开始（2026-11-22）之前的邮件也处理进来、改职位状态。→ 用 after:2026/11/22。
 - **`GEMINI_API_KEY` 只在 `~/.bashrc` 里**，非交互 shell 和 systemd 读不到。→ 用到时从环境变量 / `.bashrc` / `.env` 读。
 
+- **主屏幕 PWA 里点外链会开在系统内嵌浏览器，不是 Chrome**（`target=_blank` 也一样）。→ iPhone 上把职位 / 投递链接的 `https://` 换成 `googlechromes://`，直接拉起 Chrome App。
 - **iOS 输入框字号 < 16px，聚焦时页面自动放大且不缩回**。→ input / select / textarea 统一 16px。
 
 ## 匹配分 / agy

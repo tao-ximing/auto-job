@@ -291,6 +291,13 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = u => /^https:\/\//i.test(u || '') ? u : '#';   // 职位链接只放行 https
+// iPhone / iPad：职位和投递链接直接在 Chrome App 里打开（googlechromes:// 是 Chrome 的 URL scheme）。
+// 不这样的话，主屏幕 PWA 里点外链会开在系统的内嵌浏览器里，而不是 Chrome。
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const extLink = u => {
+  const s = safeUrl(u);
+  return s !== '#' && isIOS ? { href: s.replace(/^https:\/\//i, 'googlechromes://'), target: '' } : { href: s, target: ' target="_blank"' };
+};
 // 请求都带超时：手机走 4G + Tailscale 时连接偶尔会卡住，没有超时的话页面会一直等、看起来像整个 App 卡死
 async function api(path, body) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), body ? 20000 : 15000);
@@ -416,7 +423,8 @@ function renderList() {
       <div class="meta"><span>${ago(j.posted_at || j.first_seen)}</span><span>· ${srcs}</span>${salary ? `<span>· ${esc(salary)}</span>` : ''}${j.match === 'jd' ? `<span>· JD 提到“${esc(state.q)}”</span>` : ''}</div>
       <div class="chips">
         ${showStatus && j.status !== 'new' ? `<span class="chip st">${STATUS[j.status]}</span>` : ''}
-        ${sc != null ? `<span class="chip ${scoreCls(sc)}"><span class="score">${sc}</span> · ${TRACK[j.llm_track] || ''}</span>` : ''}
+        ${sc != null ? `<span class="chip ${scoreCls(sc)}"><span class="score">${sc}</span> · ${TRACK[j.llm_track] || ''}</span>`
+          : !j.filtered && ['new', 'shortlisted'].includes(j.status) ? '<span class="chip">待打分</span>' : ''}
         ${j.quiet_days ? `<span class="chip warn">${j.quiet_days} 天无动静</span>` : ''}
         ${j.postings.some(isQuick) ? '<span class="chip ok">一键投</span>' : ''}
         ${tagChips(j.tags)}
@@ -529,8 +537,8 @@ function renderDetail(d, keepScroll) {
     <div class="chips" style="margin-top:8px"><span class="chip st">${STATUS[j.status]}</span>${d.postings.some(p => isQuick(p.extra || {})) ? '<span class="chip ok">一键投</span>' : ''}${tagChips(filters)}</div>
     ${fitHtml(j)}
     <div class="facts">${facts.map(([k, v]) => `<div class="fact"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
-    <div class="links">${d.postings.map(p => `<a class="link-btn" href="${esc(safeUrl(applyUrl(p)))}" target="_blank" rel="noopener">
-      <span class="src">${p.extra?.quick_apply ? `一键投（${SRC[p.source]}）` : p.extra?.apply_url ? '去官网投递' : `在 ${SRC[p.source]} 打开`}</span><span class="sm">${esc(p.company)}${p.is_agency ? '（中介）' : ''}</span>${ICON.ext}</a>`).join('')}</div>
+    <div class="links">${d.postings.map(p => { const l = extLink(applyUrl(p)); return `<a class="link-btn" href="${esc(l.href)}"${l.target} rel="noopener">
+      <span class="src">${p.extra?.quick_apply ? `一键投（${SRC[p.source]}）` : p.extra?.apply_url ? '去官网投递' : `在 ${SRC[p.source]} 打开`}</span><span class="sm">${esc(p.company)}${p.is_agency ? '（中介）' : ''}</span>${ICON.ext}</a>`; }).join('')}</div>
 
     ${rejects.length || j.filter_override ? `<div class="sec warn">
       <h3 style="color:inherit">${j.filter_override ? '已手动放行' : '被过滤'}</h3>
@@ -863,7 +871,6 @@ async function quickSkip(id) {
 
 // ── 通知（Web Push）──
 // iPhone 只有"添加到主屏幕"后从图标打开才能开通知；Android Chrome 直接可以。
-const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
 const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const pushOK = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 let pushSub = null;
