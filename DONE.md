@@ -34,6 +34,8 @@
 - 只给规则放行的待处理职位打分，每个职位只打一次；每轮抓取后、推送前跑。agy 不可用时跳过，下一轮补。
 - 排序：待处理按分数从高到低（没打分的排最前，不埋掉）。「普通开发」类只有能一键投的按原分排，否则减 25 分（`score.RANK_SQL`，改规则不用重打）。
 - 实测（2026-11-26）：单个 12-20 秒，3 个并发不限速；30 次约用 Gemini 5 小时额度的 4%、每周额度的 1%。
+- 精简 agent `scorer`（`~/job-match/.agents/agents/scorer/agent.md`，`excludeDefaultComponents: true`、不带工具）：
+  去掉 agy 自带的约 1 万 token 系统提示词，每个职位约 5k token（原来 15-17k）、10-16 秒。它不会自动读 AGENTS.md，由 score.py 读出来放进消息。
 - **之前的本地 embedding 匹配分已删除（2026-11-26）**：Ollama + Qwen3-Embedding-0.6B + 按已投 / 不投训练的逻辑回归。
   结果：投过的确实都在线以上（没漏），但线以上的大部分仍然不合适（91 个线以上的被跳过），分不出"能做但简历过不了"的职位，
   所以换成 agy。`match.py`、`job_vectors` 表、`match_score` / `match_high` 列都已删掉（`db.connect()` 会自动清理老库）。

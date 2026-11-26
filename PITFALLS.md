@@ -95,6 +95,9 @@
 ## 匹配分 / agy
 
 - **打分提示里只放简历、不写硬条件，模型只看技术匹配**：纯股权的 Co-Founder / CTO 被打了 75 分。→ 硬条件和"简历能不能过筛"的标准写进 `~/job-match/AGENTS.md`。
+- **agy 每次调用自带约 1 万 token 的系统提示词**（只回 "ok" 也要 10k）。→ 自定义 agent 写 `excludeDefaultComponents: true`，降到几百。
+- **精简 agent 配 `--json-schema` 会反复重试**（4 轮、35 秒）：结构化输出靠默认组件，被一起去掉了。→ 不传 `--json-schema`，格式写进提示、自己解析。
+- **精简 agent 不读 AGENTS.md**（`excludeDefaultComponents` 连规则文件一起去掉）。→ 内容由调用方放进消息。
 - **"能做"不等于"能投"**：data engineer 能做，但这份 AI 方向的简历过不了 ATS。打分要问"不改叙事能不能过筛"，不是"有没有能力"。
 - （已删除的 embedding 方案）召回够、精度不够：投过的都在线以上，但线以上大部分仍要手动跳过。
 

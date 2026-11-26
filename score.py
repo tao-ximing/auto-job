@@ -1,7 +1,8 @@
 """匹配分：用 agy CLI（Antigravity，默认模型 neon medium）按简历给职位打 0-100 分。
 
-- 简历和打分规则在 ~/job-match/AGENTS.md（不在这个仓库里，不进 git）。agy 在那个目录里运行时会自动读它，
-  所以每次调用只需要传 JD。你也可以 cd 过去直接和 agy 聊某个 JD。
+- 简历和打分规则在 ~/job-match/AGENTS.md（不在这个仓库里，不进 git），每次调用读出来和 JD 一起发。
+  用精简 agent scorer（同目录 .agents/agents/scorer/agent.md）跑，不带 agy 自带的系统提示词和工具。
+  你也可以 cd 过去直接和 agy 聊某个 JD（默认 agent 会自动读 AGENTS.md）。
 - 只给通过规则、待处理（new / shortlisted）、还没打过分的职位打分。每个职位只打一次。
 - 结果：jobs.llm_score / llm_track（ai / swe / other_story / cross_stack）/ llm_detail（JSON：理由、缺口、风险）。
 - 排序分 = llm_score；track 是 swe 且不能一键投的，排序时减 SWE_PENALTY（RANK_SQL）。
@@ -18,6 +19,9 @@ from db import connect, now
 WORKDIR = os.environ.get("AUTO_JOB_MATCH_DIR", os.path.expanduser("~/job-match"))
 MODEL = os.environ.get("AUTO_JOB_AGY_MODEL", "gemini-4-neon-medium")
 AGY = shutil.which("agy") or os.path.expanduser("~/.local/bin/agy")
+# 精简 agent（~/job-match/.agents/agents/scorer/agent.md）：excludeDefaultComponents 去掉 agy 自带的系统提示词和工具，
+# 每次调用的固定开销从约 1 万 token 降到几百。它也不会自动读 AGENTS.md，所以规则和简历由这里读出来放进消息里。
+AGENT = "scorer"
 PARALLEL = 3
 TIMEOUT = 240          # 秒，单个职位
 JD_CHARS = 12000
@@ -58,28 +62,42 @@ def _rows(conn, which):
         FROM jobs j WHERE {where} ORDER BY j.id DESC""").fetchall()
 
 
+def _rules():
+    return open(os.path.join(WORKDIR, "AGENTS.md")).read()
+
+
+def _parse(text):
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.split("\n", 1)[1].rsplit("```", 1)[0]
+    return json.loads(t[t.index("{"):t.rindex("}") + 1])
+
+
 def score_one(r):
     """返回 (job_id, dict | None, 错误信息)。"""
     jd = (r["jd"] or "")[:JD_CHARS]
-    prompt = (f"Score this job against the candidate in AGENTS.md.\n\nTitle: {r['title']}\nCompany: {r['company']}\n"
+    prompt = (f"{_rules()}\n\n---\n\nScore this job against the candidate above.\n\nTitle: {r['title']}\nCompany: {r['company']}\n"
               f"Location: {r['location']}\nWork arrangement: {r['wa'] or 'unknown'}\nSalary: {r['salary'] or 'not stated'}\n\n"
-              f"Job description:\n{jd or '(no description available, judge from the title)'}")
+              f"Job description:\n{jd or '(no description available, judge from the title)'}\n\n---\n\n"
+              f"Reply with only one JSON object (no code fence, no other text) matching this JSON Schema:\n{json.dumps(SCHEMA)}")
     try:
-        p = subprocess.run([AGY, "-p", prompt, "--model", MODEL, "--output-format", "json",
-                            "--json-schema", json.dumps(SCHEMA), "--disable-slash-commands",
+        # 不用 --json-schema：它靠 agy 的默认组件（结构化输出工具），精简 agent 没有，会反复重试好几轮。
+        # 格式写在提示里，这里自己解析（容忍 ```json 代码块）。
+        p = subprocess.run([AGY, "-p", prompt, "--agent", AGENT, "--model", MODEL, "--output-format", "json",
+                            "--disable-slash-commands",
                             "--print-timeout", f"{TIMEOUT}s"],
                            capture_output=True, text=True, cwd=WORKDIR, timeout=TIMEOUT + 30)
         d = json.loads(p.stdout)
         if d.get("status") != "SUCCESS":
             return r["id"], None, f"agy status {d.get('status')}: {str(d.get('response'))[:200]}"
-        out = json.loads(d["response"])
+        out = _parse(d["response"])
         if out.get("track") not in TRACKS or not isinstance(out.get("score"), int):
             return r["id"], None, f"返回格式不对: {d['response'][:200]}"
         out["score"] = max(0, min(100, out["score"]))
         return r["id"], out, None
     except subprocess.TimeoutExpired:
         return r["id"], None, "超时"
-    except (json.JSONDecodeError, KeyError) as e:
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
         return r["id"], None, f"解析失败 {e}: {(p.stdout or p.stderr)[:200]}"
 
 
@@ -87,8 +105,9 @@ def run(conn, which="pending", verbose=True):
     """打分。返回 {"scored": n, "failed": n}。agy 不存在 / 规则文件不存在时抛 Unavailable。"""
     if not os.path.exists(AGY):
         raise Unavailable("找不到 agy")
-    if not os.path.exists(os.path.join(WORKDIR, "AGENTS.md")):
-        raise Unavailable(f"{WORKDIR}/AGENTS.md 不存在")
+    for f in ("AGENTS.md", f".agents/agents/{AGENT}/agent.md"):
+        if not os.path.exists(os.path.join(WORKDIR, f)):
+            raise Unavailable(f"{WORKDIR}/{f} 不存在")
     rows = _rows(conn, which)
     ok = bad = 0
     t0 = time.time()
