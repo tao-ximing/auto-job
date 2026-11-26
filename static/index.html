@@ -375,6 +375,10 @@ $('sheetGap').addEventListener('click', closeSheet);   // 点弹层外面
 // ── 数据 ──
 async function loadSummary() {
   const s = state.summary = await api('/api/summary');
+  // 服务端页面更新了：在没打字、没开弹层的时候重新加载（详情的 ?job= 在地址里，重新加载后还会打开）
+  if (state.ver && s.ver && s.ver !== state.ver && !['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName)
+      && !$('sheetWrap').classList.contains('open')) { location.reload(); return; }
+  state.ver ??= s.ver;
   $('tabbar').innerHTML = VIEWS.map(([v, l]) =>
     `<button data-view="${v}" class="${v === state.view ? 'on' : ''}">${ICON[v]}<span>${l}${v === 'me' ? '' : ` <span class="n">${s.views[v] ?? 0}</span>`}</span></button>`).join('');
   $('menuBtn').classList.toggle('dot', !!s.unmatched_emails);

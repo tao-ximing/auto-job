@@ -142,7 +142,9 @@ def summary(c):
     runs = [dict(r) for r in c.execute("""SELECT r.* FROM runs r JOIN (SELECT source, max(id) id FROM runs GROUP BY source) m ON m.id=r.id""")]
     dups = c.execute("SELECT count(*) FROM dup_candidates WHERE status='pending'").fetchone()[0]
     unmatched = c.execute("SELECT count(*) FROM emails WHERE state='unmatched'").fetchone()[0]
-    return {"counts": counts, "views": views, "runs": runs, "pending_dups": dups, "unmatched_emails": unmatched, "statuses": STATUSES}
+    return {"counts": counts, "views": views, "runs": runs, "pending_dups": dups, "unmatched_emails": unmatched, "statuses": STATUSES,
+            # 页面版本：index.html 改了，开着的页面（主屏幕 PWA 常常几天不重新加载）会自动刷新成新版本
+            "ver": int(os.path.getmtime(os.path.join(HERE, "static", "index.html")))}
 
 
 class BadRequest(Exception):

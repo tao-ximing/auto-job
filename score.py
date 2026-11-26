@@ -12,9 +12,9 @@
   python3 score.py --all      # 通过规则的、没打分的职位全部打分（包括已处理的）
   python3 score.py --rescore  # 待处理的全部重打（改了 AGENTS.md 之后用）
 """
-import argparse, json, os, shutil, subprocess, sys, time
+import argparse, json, os, shutil, sqlite3, subprocess, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
-from db import connect, now
+from db import DB_PATH, connect, now
 
 WORKDIR = os.environ.get("AUTO_JOB_MATCH_DIR", os.path.expanduser("~/job-match"))
 MODEL = os.environ.get("AUTO_JOB_AGY_MODEL", "gemini-4-neon-medium")
@@ -101,32 +101,96 @@ def score_one(r):
         return r["id"], None, f"解析失败 {e}: {(p.stdout or p.stderr)[:200]}"
 
 
-def run(conn, which="pending", verbose=True):
-    """打分。返回 {"scored": n, "failed": n}。agy 不存在 / 规则文件不存在时抛 Unavailable。"""
+def check():
+    """agy / 规则文件不在就抛 Unavailable。"""
     if not os.path.exists(AGY):
         raise Unavailable("找不到 agy")
     for f in ("AGENTS.md", f".agents/agents/{AGENT}/agent.md"):
         if not os.path.exists(os.path.join(WORKDIR, f)):
             raise Unavailable(f"{WORKDIR}/{f} 不存在")
+
+
+def _save(conn, jid, out, err, tag=""):
+    """写结果，返回 True = 打上了分。只更新还在库里的职位（打分期间可能被合并删掉）。"""
+    if out is None:
+        print(f"[score] #{jid} 失败：{err}", file=sys.stderr)
+        return False
+    detail = {k: out[k] for k in ("reason", "gaps_minor", "gaps_major", "red_flags")} | {"model": MODEL, "at": now()}
+    conn.execute("UPDATE jobs SET llm_score=?, llm_track=?, llm_detail=? WHERE id=?",
+                 (out["score"], out["track"], json.dumps(detail, ensure_ascii=False), jid))
+    conn.commit()
+    print(f"[score] {tag}#{jid} {out['score']:3d} {out['track']:<11} {out['reason']}", file=sys.stderr)
+    return True
+
+
+def run(conn, which="pending", verbose=True):
+    """一次性打分（命令行、补漏用）。返回 {"scored": n, "failed": n}。"""
+    check()
     rows = _rows(conn, which)
     ok = bad = 0
-    t0 = time.time()
     with ThreadPoolExecutor(PARALLEL) as ex:
-        for jid, out, err in ex.map(score_one, rows):
-            if out is None:
+        for n, (jid, out, err) in enumerate(ex.map(score_one, rows), 1):
+            if _save(conn, jid, out, err, f"{n}/{len(rows)} "):
+                ok += 1
+            else:
                 bad += 1
-                print(f"[score] {jid} 失败：{err}", file=sys.stderr)
-                continue
-            detail = {k: out[k] for k in ("reason", "gaps_minor", "gaps_major", "red_flags")} | {"model": MODEL, "at": now()}
-            # 只更新还在库里的职位（打分期间可能被合并删掉）
-            conn.execute("UPDATE jobs SET llm_score=?, llm_track=?, llm_detail=? WHERE id=?",
-                         (out["score"], out["track"], json.dumps(detail, ensure_ascii=False), jid))
-            conn.commit()
-            ok += 1
-            if verbose:
-                print(f"[score] {ok + bad}/{len(rows)} #{jid} {out['score']:3d} {out['track']:<11} {out['reason']}  ({time.time() - t0:.0f}s)",
-                      file=sys.stderr)
     return {"scored": ok, "failed": bad}
+
+
+class Background:
+    """抓取期间边抓边打分：每 POLL 秒查一次新入库、还没打分的待处理职位，交给线程池（最多 PARALLEL 个同时跑）。
+    新职位入库后十几秒就有分数，不用等整轮抓取（LinkedIn 登录模式一轮要 7-10 分钟）结束。
+    每个职位这一轮只试一次；失败的留给下一轮。用自己的数据库连接（sqlite 连接不能跨线程）。
+
+        bg = Background().start()   # agy 不可用时抛 Unavailable
+        ...抓取...
+        stats = bg.finish()         # 停止找新职位，等已提交的打完
+    """
+    POLL = 5
+
+    def __init__(self):
+        self._stop = threading.Event()
+        self._seen = set()
+        self._futs = []
+        self._pool = ThreadPoolExecutor(PARALLEL)
+        self._db_lock = threading.Lock()
+        self._db = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def start(self):
+        check()
+        self._thread.start()
+        return self
+
+    def _loop(self):
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        conn.row_factory = sqlite3.Row
+        try:
+            while True:
+                try:
+                    for r in _rows(conn, "pending"):
+                        if r["id"] not in self._seen:
+                            self._seen.add(r["id"])
+                            self._futs.append(self._pool.submit(self._one, r))
+                except sqlite3.Error as e:   # 抓取那边正在写：下一次再查
+                    print(f"[score] 查新职位出错：{e}", file=sys.stderr)
+                if self._stop.wait(self.POLL):
+                    break
+        finally:
+            conn.close()
+
+    def _one(self, r):
+        jid, out, err = score_one(r)
+        with self._db_lock:
+            return _save(self._db, jid, out, err)
+
+    def finish(self):
+        self._stop.set()
+        self._thread.join()
+        ok = sum(1 for f in self._futs if f.result())
+        self._pool.shutdown()
+        self._db.close()
+        return {"scored": ok, "failed": len(self._futs) - ok}
 
 
 if __name__ == "__main__":

@@ -276,6 +276,13 @@ def main():
     conn = connect()
     t0 = now()
     ing = Ingestor(conn)
+    bg = None
+    if a.only in (None, "seek", "linkedin"):   # 匹配分：后台边抓边打，新职位入库十几秒后就有分数
+        try:
+            import score
+            bg = score.Background().start()
+        except Exception as e:   # agy 不可用等：只是没有匹配分，不算抓取出错，下一轮再补
+            print(f"[score] 跳过：{e}", file=sys.stderr)
     if a.only in (None, "seek"):
         print("SEEK: 看到 %d 条，新增 %d 条" % run_seek(conn, ing, conf, a.seek_days))
     if a.only in (None, "linkedin") and not linkedin_due(conn, a.linkedin_min_interval):
@@ -284,13 +291,12 @@ def main():
         print("LinkedIn: 看到 %d 条，新增 %d 条" % run_linkedin(conn, ing, conf, a.linkedin_window, a.linkedin_pages, a.linkedin_max_new))
     if a.only in (None, "seek"):   # 放在 LinkedIn 之后：两边共用一个浏览器 profile，不能同时开
         print("SEEK 官网链接：补上 %d 个" % resolve_seek_links(conn))
-    if a.only in (None, "seek", "linkedin"):   # 匹配分：放在推送之前，推送按匹配分挑前几个
+    if bg:   # 推送之前等后台打完：推送按匹配分挑前几个
         try:
-            import score
-            r = score.run(conn)
+            r = bg.finish()
             print("匹配分（agy）：打分 %d 个，失败 %d 个" % (r["scored"], r["failed"]))
-        except Exception as e:   # agy 不可用 / 额度用完等：只是没有匹配分，不算抓取出错，下一轮再补
-            print(f"[score] 跳过：{e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[score] 出错：{e}", file=sys.stderr)
     mail = None
     if a.only in (None, "gmail"):   # 放在抓取之后：新抓到的职位也能被邮件匹配上
         mail = run_gmail(conn)
