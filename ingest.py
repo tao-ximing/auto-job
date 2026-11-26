@@ -156,13 +156,15 @@ def merge_jobs(conn, keep, drop):
     t = now()
     for table in ("postings", "events", "application_qa", "emails"):
         conn.execute(f"UPDATE {table} SET job_id=? WHERE job_id=?", (keep, drop))
-    conn.execute("DELETE FROM job_vectors WHERE job_id IN (?,?)", (keep, drop))   # 合并后 JD 可能变了，下轮重算
     k, d = conn.execute("SELECT * FROM jobs WHERE id=?", (keep,)).fetchone(), conn.execute("SELECT * FROM jobs WHERE id=?", (drop,)).fetchone()
     # 状态保留更"往前走"的那个（比如一个已经 applied，另一个还是 new）
     order = {s: i for i, s in enumerate(["new", "shortlisted", "skipped", "closed", "applied", "assessment", "interview", "rejected", "offer"])}
     status = max((k["status"], d["status"]), key=lambda s: order.get(s, 0))
     notes = "\n".join(x for x in (k["notes"], d["notes"]) if x)
-    conn.execute("UPDATE jobs SET status=?, notes=?, filter_override=? WHERE id=?", (status, notes, k["filter_override"] or d["filter_override"], keep))
+    # 匹配分取两边较高的那个（两条帖子说的是同一个职位，JD 详细的那条通常分数更准）
+    best = max((k, d), key=lambda x: -1 if x["llm_score"] is None else x["llm_score"])
+    conn.execute("UPDATE jobs SET status=?, notes=?, filter_override=?, llm_score=?, llm_track=?, llm_detail=? WHERE id=?",
+                 (status, notes, k["filter_override"] or d["filter_override"], best["llm_score"], best["llm_track"], best["llm_detail"], keep))
     conn.execute("UPDATE dup_candidates SET status='merged' WHERE (job_a=? AND job_b=?) OR (job_a=? AND job_b=?)", (*sorted((keep, drop)), *sorted((keep, drop))))
     # drop 的其他疑似重复改挂到 keep 上
     for r in conn.execute("SELECT * FROM dup_candidates WHERE (job_a=? OR job_b=?) AND status='pending'", (drop, drop)).fetchall():
@@ -213,7 +215,7 @@ def rebuild(conn):
         conn.execute("BEGIN IMMEDIATE")   # 不用 executescript：它会先自动提交，出错就回不去了
         rows = [dict(r) for r in conn.execute("SELECT * FROM postings ORDER BY first_seen, id")]
         for sql in ("UPDATE postings SET job_id=NULL", "DELETE FROM dup_candidates", "DELETE FROM events",
-                    "DELETE FROM job_vectors", "DELETE FROM jobs"):
+                    "DELETE FROM jobs"):
             conn.execute(sql)
         ing = Ingestor(conn)
         ing._cache = {}

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from db import STATUSES, connect, now
 from ingest import merge_jobs, refilter_company
+from score import RANK_SQL
 import push, gmail_sync, rules
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -76,13 +77,13 @@ def list_jobs(c, view, q, source):
         where.append("EXISTS (SELECT 1 FROM postings x WHERE x.job_id=j.id AND x.source=?)")
         args.append(source)
     rows = c.execute(f"""
-        SELECT j.*, (SELECT max(posted_at) FROM postings x WHERE x.job_id=j.id) posted_at,
+        SELECT j.*, {RANK_SQL} rank_score, (SELECT max(posted_at) FROM postings x WHERE x.job_id=j.id) posted_at,
                (SELECT min(first_seen) FROM postings x WHERE x.job_id=j.id) first_seen,
                (SELECT max(at) FROM events e WHERE e.job_id=j.id AND e.source!='auto') last_activity,
                (SELECT min(at) FROM events e WHERE e.job_id=j.id AND e.status='applied') applied_at
         FROM jobs j WHERE {' AND '.join(where)}
-        -- 待处理：匹配分线以上一组在前、线以下一组在后（没算出分数的算以上，不埋掉），两组内都按时间
-        ORDER BY CASE WHEN j.status IN ('new','shortlisted') AND j.match_high = 0 THEN 1 ELSE 0 END,
+        -- 待处理：按排序分从高到低（还没打分的排最前，不埋掉），同分按时间；其他视图按时间
+        ORDER BY CASE WHEN j.status IN ('new','shortlisted') THEN {RANK_SQL} END DESC NULLS FIRST,
                  CASE WHEN j.status IN ('new','shortlisted') THEN coalesce(posted_at, first_seen) ELSE coalesce(last_activity, first_seen) END DESC
         LIMIT 1000""", args).fetchall()
     match = {}
@@ -97,7 +98,7 @@ def list_jobs(c, view, q, source):
         extra = json.loads(p["extra"]) if p["extra"] else {}
         posts.setdefault(p["job_id"], []).append({"source": p["source"], "url": p["url"], "agency": bool(p["is_agency"]),
                                                   "work_arrangement": p["work_arrangement"], "salary": p["salary"],
-                                                  "easy_apply": extra.get("easy_apply")})
+                                                  "quick_apply": extra.get("quick_apply"), "apply_url": extra.get("apply_url")})
     for t in c.execute(f"SELECT DISTINCT p.job_id, f.rule, f.action, f.reason FROM filter_results f JOIN postings p ON p.id=f.posting_id WHERE p.job_id IN ({ph})", ids):
         tags.setdefault(t["job_id"], []).append({"rule": t["rule"], "action": t["action"], "reason": t["reason"]})
     for h in c.execute(f"SELECT DISTINCT p.job_id, h.search FROM search_hits h JOIN postings p ON p.id=h.posting_id WHERE p.job_id IN ({ph})", ids):

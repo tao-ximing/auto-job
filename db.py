@@ -93,13 +93,6 @@ CREATE TABLE IF NOT EXISTS emails (                -- 和求职相关的邮件�
 );
 CREATE INDEX IF NOT EXISTS emails_job ON emails(job_id);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
-CREATE TABLE IF NOT EXISTS job_vectors (            -- 匹配分用的 embedding（match.py），float32 原始字节
-  job_id INTEGER PRIMARY KEY REFERENCES jobs(id),
-  model TEXT NOT NULL,
-  doc BLOB NOT NULL,                                 -- 职位名 + JD
-  title BLOB NOT NULL,                               -- 职位名（带任务说明）
-  created_at TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS llm_usage (               -- Gemini 用量，按月记，用来卡预算
   month TEXT PRIMARY KEY, calls INTEGER NOT NULL DEFAULT 0,
   tokens_in INTEGER NOT NULL DEFAULT 0, tokens_out INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0
@@ -130,8 +123,19 @@ def connect(path=DB_PATH):
         if col not in cols:
             conn.execute(f"ALTER TABLE emails ADD COLUMN {col} TEXT")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
-    for col, typ in (("match_score", "REAL"), ("match_high", "INTEGER")):   # match.py：分数，1=分数线以上 0=以下 NULL=没算
+    # score.py（agy 打分）：llm_score 0-100，llm_track ai/swe/other_story/cross_stack，llm_detail JSON。NULL = 没打分
+    for col, typ in (("llm_score", "INTEGER"), ("llm_track", "TEXT"), ("llm_detail", "TEXT")):
         if col not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {typ}")
+    # 2026-11-26 删掉了本地 embedding 匹配分（match.py）：清掉它留下的列、表和模型
+    for col in ("match_score", "match_high"):
+        if col in cols:
+            conn.execute(f"ALTER TABLE jobs DROP COLUMN {col}")
+    conn.execute("DROP TABLE IF EXISTS job_vectors")
+    conn.execute("DELETE FROM kv WHERE key='match_model'")
+    # LinkedIn 的 Easy Apply 和 SEEK 的 Quick Apply 统一叫 quick_apply（网页上叫「一键投」）
+    conn.execute("""UPDATE postings SET extra=json_set(json_remove(extra, '$.easy_apply'), '$.quick_apply',
+                    json(CASE WHEN json_extract(extra, '$.easy_apply') THEN 'true' ELSE 'false' END))
+                    WHERE extra IS NOT NULL AND json_valid(extra) AND json_type(extra, '$.easy_apply') IS NOT NULL""")
     conn.commit()
     return conn

@@ -56,6 +56,8 @@ def details(job_id):
     return {"description": first(r'show-more-less-html__markup[^>]*>(.*?)</div>', d),
             "posted_text": first(r'posted-time-ago__text[^>]*>(.*?)<', d),
             "applicants": first(r'num-applicants__caption[^>]*>(.*?)<', d) or first(r'num-applicants__figure[^>]*>(.*?)<', d),
+            # 不登录看不到官网地址，但能看出是不是外部投递（Apply 按钮带 offsite 图标）
+            "quick_apply": "offsite-apply" not in d,
             "criteria": crit}
 
 
@@ -95,7 +97,8 @@ def search(s, known=frozenset(), tpr=86400, max_pages=5, max_new=40):
                 "posted_at": (datetime.now(timezone.utc) - timedelta(minutes=age)).strftime("%Y-%m-%dT%H:%M:%SZ") if age is not None else None,
                 "work_type": d["criteria"].get("Employment type"),
                 "extra": {"mode": "guest", "posted_text": d["posted_text"], "applicants": d["applicants"],
-                          "seniority": d["criteria"].get("Seniority level"), "industries": d["criteria"].get("Industries")},
+                          "seniority": d["criteria"].get("Seniority level"), "industries": d["criteria"].get("Industries"),
+                          "quick_apply": d["quick_apply"]},
             }
         pause()
 

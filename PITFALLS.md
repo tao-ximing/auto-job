@@ -92,11 +92,11 @@
 
 - **iOS 输入框字号 < 16px，聚焦时页面自动放大且不缩回**。→ input / select / textarea 统一 16px。
 
-## 匹配分 / Ollama
+## 匹配分 / agy
 
-- **Ollama 屏蔽了 CUDA 还是用显卡**：它会改走 Vulkan 用上同一块 NVIDIA。→ `CUDA_VISIBLE_DEVICES=-1` + `OLLAMA_VULKAN=false` + `GGML_VK_VISIBLE_DEVICES=-1`，用 `nvidia-smi` 确认。
-- **全量算向量时 12 核跑满、风扇狂转**。→ systemd 里 `CPUQuota=400%`、`Nice=19`。日常每小时只算新职位，几十秒。
-- **只跑一次交叉验证的数字会偏乐观**（"保留全部投过的、挡掉 41%"，换 5 种分折后其实约 17%±9%）。→ 评估要多换几次分折。
+- **打分提示里只放简历、不写硬条件，模型只看技术匹配**：纯股权的 Co-Founder / CTO 被打了 75 分。→ 硬条件和"简历能不能过筛"的标准写进 `~/job-match/AGENTS.md`。
+- **"能做"不等于"能投"**：data engineer 能做，但这份 AI 方向的简历过不了 ATS。打分要问"不改叙事能不能过筛"，不是"有没有能力"。
+- （已删除的 embedding 方案）召回够、精度不够：投过的都在线以上，但线以上大部分仍要手动跳过。
 
 ## 环境
 

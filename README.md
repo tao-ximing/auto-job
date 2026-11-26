@@ -37,6 +37,7 @@ LinkedIn 登录模式的 Chrome 跑在 Xvfb 虚拟屏幕上（不弹窗口；`su
 ```bash
 python3 run.py                       # 手动抓一遍（SEEK 3 天 + LinkedIn 24 小时）
 python3 ingest.py --refilter         # 改了 filters.toml 后重算过滤（保留手动状态）
+python3 score.py --rescore           # 改了 ~/job-match/AGENTS.md 后给待处理的重新打分
 python3 push.py test "标题" "内容"    # 给手机发一条测试推送
 python3 -m unittest test_rules       # 测试过滤和去重
 python3 gmail.py test                # 测试 Gmail 只读连接（重新授权：python3 gmail.py auth）
@@ -52,6 +53,7 @@ python3 run.py --only gmail          # 只同步 Gmail
 | `seek.py` | SEEK JSON 接口 |
 | `linkedin.mjs` + `browser.mjs` | LinkedIn 登录模式（专用 Chrome profile） |
 | `linkedin_guest.py` | LinkedIn 不登录模式（自动兜底） |
+| `seek_links.mjs` | SEEK 外部投递职位的官网链接（登录 profile 打开投递页，记下跳转地址） |
 | `rules.py` | 规范化、过滤、去重打分（纯函数） |
 | `ingest.py` | 入库、过滤、去重、合并 |
 | `run.py` | 跑全部搜索 + 通知 |
@@ -61,4 +63,5 @@ python3 run.py --only gmail          # 只同步 Gmail
 | `gmail.py` | Gmail 只读授权和读取（`credentials.json` + `token.json`，都不进 git） |
 | `gmail_sync.py` | 邮件同步：预筛、分类、匹配职位、推进状态 |
 | `llm.py` | Gemini 分类（带月度预算上限） |
+| `score.py` | 匹配分：agy CLI 按 `~/job-match/AGENTS.md`（简历 + 规则，不进 git）打分 |
 | `test_rules.py` | 测试 |

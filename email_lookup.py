@@ -48,14 +48,16 @@ def find_seek(company, title):
     j = _pick(cards, company, title)
     if not j:
         return None
+    jd, quick = seek.details(j["id"])
     return {"source": "seek", "source_id": j["id"], "search": SEARCH_NAME, "title": j["title"],
             "company": j.get("companyName") or (j.get("advertiser") or {}).get("description"),
             "location": ", ".join(l["label"] for l in j.get("locations") or []) or None,
             "url": f"https://au.seek.com/job/{j['id']}", "posted_at": j.get("listingDate"),
             "salary": j.get("salaryLabel") or None, "work_type": ", ".join(j.get("workTypes") or []) or None,
             "work_arrangement": ((j.get("workArrangements") or {}).get("displayText")) or None,
-            "description": seek.details(j["id"]),
-            "extra": {"teaser": j.get("teaser"), "via": "email_lookup"}}
+            "description": jd,
+            "extra": {"teaser": j.get("teaser"), "via": "email_lookup", "quick_apply": quick,
+                      **({"apply_url": seek.apply_url(j["id"])} if quick else {})}}
 
 
 def find_linkedin(company, title):

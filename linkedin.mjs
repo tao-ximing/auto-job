@@ -17,6 +17,14 @@ const ageMinutes = (s) => {
   const m = /(\d+)\s+(minute|hour|day|week|month)/.exec(s || '');
   return m ? Number(m[1]) * UNIT[m[2]] : null;
 };
+// safety/go 跳转链接 → 官网地址；只放行 https
+const offsiteUrl = (href) => {
+  try {
+    const u = new URL(href, 'https://www.linkedin.com');
+    const target = u.pathname.startsWith('/safety/go') ? u.searchParams.get('url') : u.href;
+    return /^https:\/\//i.test(target || '') && !/^https:\/\/([^/]+\.)?linkedin\.com\//i.test(target) ? target : null;
+  } catch { return null; }
+};
 const emit = (o) => process.stdout.write(JSON.stringify(o) + '\n');
 const log = (...a) => console.error('[linkedin]', ...a);
 
@@ -117,7 +125,9 @@ try {
           const lines = (pane?.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
           return {
             meta: lines.find(l => / · /.test(l) && /ago/.test(l)) || null,
-            easyApply: !!pane?.querySelector('button[aria-label*="Easy Apply"], a[aria-label*="Easy Apply"]'),
+            quickApply: !!pane?.querySelector('button[aria-label*="Easy Apply"], a[aria-label*="Easy Apply"]'),
+            // 外部投递："Apply on company website" 链接经 linkedin.com/safety/go/?url=<官网> 跳转，取出官网地址
+            offsite: pane?.querySelector('a[aria-label*="company website"]')?.getAttribute('href') || null,
             description: jd?.innerText.replace(/^About the job\s*/, '').replace(/\s*…\s*more$/, '').trim(),
           };
         });
@@ -132,7 +142,8 @@ try {
           description: d.description,
           posted_at: age == null ? null : new Date(Date.now() - age * 60000).toISOString().replace(/\.\d+Z$/, 'Z'),
           work_arrangement: /\((Remote|Hybrid|On-site)\)/.exec(location || '')?.[1] ?? null,
-          extra: { posted_text: posted ?? null, applicants: applicants ?? null, easy_apply: d.easyApply },
+          extra: { posted_text: posted ?? null, applicants: applicants ?? null, quick_apply: d.quickApply,
+                   ...(offsiteUrl(d.offsite) ? { apply_url: offsiteUrl(d.offsite) } : {}) },
         });
       }
 

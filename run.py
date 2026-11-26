@@ -50,6 +50,41 @@ def run_seek(conn, ing, conf, days):
     return seen, new
 
 
+SEEK_LINKS_PER_RUN = 20
+
+
+def resolve_seek_links(conn):
+    """SEEK 外部投递职位的官网链接（seek_links.mjs，要登录）。只查规则放行、待处理、还没查过的；每个只查一次。
+    出错只打日志，不算抓取出错（按钮退回打开 SEEK 职位页）。"""
+    rows = conn.execute("""SELECT p.id, p.source_id, p.extra FROM postings p JOIN jobs j ON j.id=p.job_id
+        WHERE p.source='seek' AND j.filtered=0 AND j.status IN ('new','shortlisted')
+          AND json_extract(p.extra, '$.quick_apply') = 0
+          AND json_extract(p.extra, '$.apply_url') IS NULL AND json_extract(p.extra, '$.apply_url_tried') IS NULL
+        ORDER BY p.id DESC LIMIT ?""", (SEEK_LINKS_PER_RUN,)).fetchall()
+    if not rows:
+        return 0
+    try:
+        p = subprocess.run(["node", os.path.join(HERE, "seek_links.mjs"), *[r["source_id"] for r in rows]],
+                           capture_output=True, text=True, cwd=HERE, timeout=60 + 40 * len(rows))
+        if p.returncode != 0:
+            print(f"[seek-links] 退出码 {p.returncode}：{p.stderr.strip()[-300:]}", file=sys.stderr)
+            return 0
+        found = json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        print(f"[seek-links] {e}", file=sys.stderr)
+        return 0
+    n = 0
+    for r in rows:
+        if r["source_id"] not in found:
+            continue
+        ex = json.loads(r["extra"] or "{}") | {"apply_url_tried": now()}
+        if found[r["source_id"]]:
+            ex["apply_url"] = found[r["source_id"]]; n += 1
+        conn.execute("UPDATE postings SET extra=? WHERE id=?", (json.dumps(ex, ensure_ascii=False), r["id"]))
+    conn.commit()
+    return n
+
+
 def run_linkedin(conn, ing, conf, window, max_pages, max_new):
     rid, seen, new, err = start_run(conn, "linkedin"), 0, 0, None
     cfg = {"searches": conf["linkedin"], "known": sorted(ing.known_ids("linkedin")),
@@ -192,18 +227,23 @@ def notify_mail(conn, stats):
         print(f"[push] {e}", file=sys.stderr)
 
 
+HIGH_SCORE = 60   # 推送标题里"几个值得看"的分数线
+
+
 def notify_phone(conn, t0, new, errors):
     """推到手机（Web Push）：有新职位列出前 3 个，点通知打开第一个；出错单独推一条。"""
     import push
     try:
         if new:
-            # 分数线以上的排前面（没算出分数的也当作以上，不埋掉），同组按时间
-            rows = conn.execute("""SELECT id, title, company, match_high FROM jobs WHERE created_at >= ? AND filtered=0
-                                   ORDER BY coalesce(match_high, 1) DESC, id DESC""", (t0,)).fetchall()
-            hi = sum(1 for r in rows if r["match_high"] != 0)
-            lines = [f"{r['title']} @ {r['company']}" for r in rows[:3]] + ([f"…还有 {len(rows) - 3} 个"] if len(rows) > 3 else [])
+            # 按匹配分从高到低（没打出分的排最前，不埋掉）
+            from score import RANK_SQL
+            rows = conn.execute(f"""SELECT j.id, j.title, j.company, j.llm_score FROM jobs j WHERE j.created_at >= ? AND j.filtered=0
+                                    ORDER BY {RANK_SQL} DESC NULLS FIRST, j.id DESC""", (t0,)).fetchall()
+            hi = sum(1 for r in rows if r["llm_score"] is None or r["llm_score"] >= HIGH_SCORE)
+            lines = [(f"[{r['llm_score']}] " if r["llm_score"] is not None else "") + f"{r['title']} @ {r['company']}" for r in rows[:3]] \
+                + ([f"…还有 {len(rows) - 3} 个"] if len(rows) > 3 else [])
             url = f"/?job={rows[0]['id']}" if len(rows) == 1 else "/"
-            title = f"{new} 个新职位" + (f"（{hi} 个匹配）" if hi < len(rows) else "")
+            title = f"{new} 个新职位" + (f"（{hi} 个 {HIGH_SCORE} 分以上）" if hi < len(rows) else "")
             push.send_all(conn, title, "\n".join(lines), url, urgency="high")
         if errors:
             push.send_all(conn, "抓取出错", "\n".join(errors))
@@ -242,13 +282,15 @@ def main():
         print("LinkedIn: 距上次不到 %g 分钟，这次跳过" % a.linkedin_min_interval)
     elif a.only in (None, "linkedin"):
         print("LinkedIn: 看到 %d 条，新增 %d 条" % run_linkedin(conn, ing, conf, a.linkedin_window, a.linkedin_pages, a.linkedin_max_new))
+    if a.only in (None, "seek"):   # 放在 LinkedIn 之后：两边共用一个浏览器 profile，不能同时开
+        print("SEEK 官网链接：补上 %d 个" % resolve_seek_links(conn))
     if a.only in (None, "seek", "linkedin"):   # 匹配分：放在推送之前，推送按匹配分挑前几个
         try:
-            import match
-            r = match.run(conn)
-            print("匹配分：新算向量 %d 个，打分 %d 个" % (r["vectors"], r["scored"]))
-        except Exception as e:   # Ollama 没开等：只是没有匹配分，不算抓取出错
-            print(f"[match] 跳过：{e}", file=sys.stderr)
+            import score
+            r = score.run(conn)
+            print("匹配分（agy）：打分 %d 个，失败 %d 个" % (r["scored"], r["failed"]))
+        except Exception as e:   # agy 不可用 / 额度用完等：只是没有匹配分，不算抓取出错，下一轮再补
+            print(f"[score] 跳过：{e}", file=sys.stderr)
     mail = None
     if a.only in (None, "gmail"):   # 放在抓取之后：新抓到的职位也能被邮件匹配上
         mail = run_gmail(conn)

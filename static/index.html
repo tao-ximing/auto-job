@@ -73,8 +73,11 @@ main { min-height: 0; }
 .prow .pv { grid-area: v; font-size: 15px; word-break: break-all; }
 .prow .pv.empty { color: var(--faint); }
 .prow .icon-btn { grid-area: b; }
-.sep { margin: 18px 4px 10px; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
-.sep::before, .sep::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.score { font-variant-numeric: tabular-nums; font-weight: 700; }
+.sec.fit h3 { display: flex; justify-content: flex-start; align-items: center; gap: 8px; }
+.fit h3 .score { font-size: 17px; color: var(--ink, inherit); }
+.fit ul { margin: 6px 0 0; padding-left: 18px; }
+.fit .k { color: var(--muted); font-size: 12px; margin-top: 10px; }
 /* 待处理：左滑不投。卡片外面包一层，滑动时露出背后的红色"不投" */
 .swipe { position: relative; margin-bottom: 8px; border-radius: 14px; overflow: hidden; transition: height .2s, margin .2s; }
 .swipe > .card { margin-bottom: 0; position: relative; touch-action: pan-y; }
@@ -249,6 +252,12 @@ const STATUS = { new: '新', shortlisted: '想投', skipped: '不投', applied: 
 const RULE = { crowdwork_company: '众包/标注', crowdwork_title: '标注类职位', crowdwork_jd: 'AI 训练零工', outsourcing: 'IT 外包', seniority: '职级过高', phd: 'PhD',
                agency: '中介', agency_low_priority: '低优先级中介', visa: '身份要求', visa_note: '工作权限',
                blocked: '已拉黑', intern: '实习', off_stack: '技术栈不对口', stack_match: '技术栈匹配' };
+// agy 匹配分（score.py）：track 的中文名、分数 → 颜色
+const TRACK = { ai: 'AI 方向', swe: '普通开发', other_story: '要换简历', cross_stack: '跨栈' };
+const scoreCls = s => s >= 70 ? 'ok' : s >= 45 ? '' : 'bad';
+const isQuick = p => !!p.quick_apply;
+// 投递链接：一键投的打开 SEEK / LinkedIn 的投递页；外部投递的有官网链接就直接打开，没有就打开职位页
+const applyUrl = p => p.extra?.apply_url || p.apply_url || p.url;
 const SRC = { seek: 'SEEK', linkedin: 'LinkedIn', email: 'Gmail' };   // email：搜不到职位帖子，按邮件建的职位
 const MAIL = { applied: '已投递确认', viewed: '对方已查看', rejected: '被拒', assessment: '笔试/测评', interview: '面试邀请', offer: 'Offer', closed: '职位已关闭', other: '其他' };
 const MAIL_CLS = { rejected: 'bad', interview: 'ok', offer: 'ok', assessment: 'warn' };
@@ -282,8 +291,16 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = u => /^https:\/\//i.test(u || '') ? u : '#';   // 职位链接只放行 https
+// 请求都带超时：手机走 4G + Tailscale 时连接偶尔会卡住，没有超时的话页面会一直等、看起来像整个 App 卡死
 async function api(path, body) {
-  const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), body ? 20000 : 15000);
+  let r;
+  try {
+    r = await fetch(path, { signal: ctl.signal, ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+  } catch (e) {
+    toast(e.name === 'AbortError' ? '网络超时：连不上电脑（检查 Tailscale），稍后再试' : '网络出错，稍后再试');
+    throw Object.assign(new Error('network'), { status: 0 });
+  } finally { clearTimeout(timer); }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) { toast(d.error || `出错了（${r.status}）`); throw Object.assign(new Error(d.error), { status: r.status, data: d }); }
   return d;
@@ -385,25 +402,23 @@ function renderList() {
     $('list').innerHTML = `<div class="empty"><b>${state.q ? '没有找到' : '这里没有职位'}</b>${hint}</div>`;
     return;
   }
-  let lowShown = false;   // 待处理：在匹配分线以下的第一张卡片前插一条分隔线
   $('list').innerHTML = state.jobs.map(j => {
     const srcs = [...new Set(j.postings.map(p => SRC[p.source]))].join(' + ');
     const wa = j.postings.map(p => p.work_arrangement).find(Boolean);
     const salary = j.postings.map(p => p.salary).find(Boolean);
     const showStatus = state.view !== 'active' || j.status === 'shortlisted';
     const swipe = state.view === 'active';   // 只有待处理可以左滑不投
-    const low = j.match_high === 0;
-    const sep = state.view === 'active' && !state.q && low && !lowShown ? (lowShown = true, '<div class="sep">以下匹配度较低</div>') : '';
-    return `${sep}${swipe ? `<div class="swipe" data-swipe="${j.id}"><div class="swipe-bg">不投</div>` : ''}<div class="card ${j.id === state.sel ? 'sel' : ''}" data-id="${j.id}">
+    const sc = j.llm_score;
+    return `${swipe ? `<div class="swipe" data-swipe="${j.id}"><div class="swipe-bg">不投</div>` : ''}<div class="card ${j.id === state.sel ? 'sel' : ''}" data-id="${j.id}">
       <div class="t">${esc(j.title)}</div>
       <div class="co">${esc(j.company)}</div>
       <div class="meta"><span>${esc(j.location || '')}</span>${wa ? `<span>· ${esc(wa)}</span>` : ''}</div>
       <div class="meta"><span>${ago(j.posted_at || j.first_seen)}</span><span>· ${srcs}</span>${salary ? `<span>· ${esc(salary)}</span>` : ''}${j.match === 'jd' ? `<span>· JD 提到“${esc(state.q)}”</span>` : ''}</div>
       <div class="chips">
         ${showStatus && j.status !== 'new' ? `<span class="chip st">${STATUS[j.status]}</span>` : ''}
-        ${low && j.status === 'new' ? '<span class="chip">低匹配</span>' : ''}
+        ${sc != null ? `<span class="chip ${scoreCls(sc)}"><span class="score">${sc}</span> · ${TRACK[j.llm_track] || ''}</span>` : ''}
         ${j.quiet_days ? `<span class="chip warn">${j.quiet_days} 天无动静</span>` : ''}
-        ${j.postings.some(p => p.easy_apply) ? '<span class="chip ok">Easy Apply</span>' : ''}
+        ${j.postings.some(isQuick) ? '<span class="chip ok">一键投</span>' : ''}
         ${tagChips(j.tags)}
       </div>
     </div>${swipe ? '</div>' : ''}`;
@@ -456,12 +471,25 @@ async function openJob(id) {
   state.sel = id;
   document.querySelectorAll('.card').forEach(c => c.classList.toggle('sel', Number(c.dataset.id) === id));
   const seq = ++detailSeq;
-  const d = await api('/api/jobs/' + id);
-  if (seq !== detailSeq) return;   // 期间又点了别的职位：这个响应过期了
-  renderDetail(d);
+  // 先把详情面板打开，显示列表里已有的标题 / 公司 + 加载中，别让人对着没反应的页面干等
+  const j = state.jobs.find(x => x.id === id);
+  if (state.job?.job.id !== id) {
+    state.job = null;
+    $('dTitle').textContent = j?.title || '';
+    $('dBody').innerHTML = `<h2>${esc(j?.title || '')}</h2><div class="d-sub">${esc(j?.company || '')}</div><div class="d-sub" style="margin-top:16px">加载中…</div>`;
+    $('actions').hidden = true;
+  }
   $('detail').classList.add('open'); $('detail').setAttribute('aria-hidden', 'false');
   document.body.classList.add('detail-open');
   if (!isDesktop() && history.state?.detail !== id) history.pushState({ detail: id }, '');
+  let d;
+  try { d = await api('/api/jobs/' + id); }
+  catch {
+    if (seq === detailSeq) $('dBody').insertAdjacentHTML('beforeend', `<div class="row-btns" style="margin-top:12px"><button class="btn" data-open="${id}">重试</button></div>`);
+    return;
+  }
+  if (seq !== detailSeq) return;   // 期间又点了别的职位：这个响应过期了
+  renderDetail(d);
 }
 function closeDetail(fromPop) {
   $('detail').classList.remove('open'); $('detail').setAttribute('aria-hidden', 'true');
@@ -471,6 +499,15 @@ function closeDetail(fromPop) {
 }
 window.addEventListener('popstate', () => { closeSheet(); if ($('detail').classList.contains('open')) closeDetail(true); });
 $('backBtn').addEventListener('click', () => closeDetail());
+
+function fitHtml(j) {
+  if (j.llm_score == null) return '';
+  let d = {};
+  try { d = JSON.parse(j.llm_detail || '{}'); } catch {}
+  const list = (k, arr) => arr?.length ? `<div class="k">${k}</div><ul>${arr.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+  return `<div class="sec fit"><h3>匹配度<span class="score">${j.llm_score}</span> <span class="chip ${scoreCls(j.llm_score)}">${TRACK[j.llm_track] || esc(j.llm_track)}</span></h3>
+    <div>${esc(d.reason || '')}</div>${list('风险', d.red_flags)}${list('硬缺口（简历扯不上）', d.gaps_major)}${list('小缺口（同生态，补得上）', d.gaps_minor)}</div>`;
+}
 
 function renderDetail(d, keepScroll) {
   state.job = d;
@@ -482,17 +519,18 @@ function renderDetail(d, keepScroll) {
     ['发布', ago(prim.posted_at || prim.first_seen)],
     ['办公方式', prim.work_arrangement || '—'],
     ['薪资', prim.salary || '—'],
-    ['申请人数', ex.applicants || (ex.easy_apply ? 'Easy Apply' : '—')],
+    ['申请人数', ex.applicants || '—'],
   ];
   $('dTitle').textContent = j.title;
   const body = $('dBody'), top = body.scrollTop;
   body.innerHTML = `
     <h2>${esc(j.title)}</h2>
     <div class="d-sub">${esc(j.company)} · ${esc(j.location || '')}</div>
-    <div class="chips" style="margin-top:8px"><span class="chip st">${STATUS[j.status]}</span>${ex.easy_apply ? '<span class="chip ok">Easy Apply</span>' : ''}${tagChips(filters)}</div>
+    <div class="chips" style="margin-top:8px"><span class="chip st">${STATUS[j.status]}</span>${d.postings.some(p => isQuick(p.extra || {})) ? '<span class="chip ok">一键投</span>' : ''}${tagChips(filters)}</div>
+    ${fitHtml(j)}
     <div class="facts">${facts.map(([k, v]) => `<div class="fact"><div class="k">${k}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
-    <div class="links">${d.postings.map(p => `<a class="link-btn" href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">
-      <span class="src">在 ${SRC[p.source]} 打开</span><span class="sm">${esc(p.company)}${p.is_agency ? '（中介）' : ''}</span>${ICON.ext}</a>`).join('')}</div>
+    <div class="links">${d.postings.map(p => `<a class="link-btn" href="${esc(safeUrl(applyUrl(p)))}" target="_blank" rel="noopener">
+      <span class="src">${p.extra?.quick_apply ? `一键投（${SRC[p.source]}）` : p.extra?.apply_url ? '去官网投递' : `在 ${SRC[p.source]} 打开`}</span><span class="sm">${esc(p.company)}${p.is_agency ? '（中介）' : ''}</span>${ICON.ext}</a>`).join('')}</div>
 
     ${rejects.length || j.filter_override ? `<div class="sec warn">
       <h3 style="color:inherit">${j.filter_override ? '已手动放行' : '被过滤'}</h3>
