@@ -203,6 +203,10 @@ def apply_email(conn, email_id, job_id, category, subject, source="email", at=No
         return None
     new = TARGET.get(category)
     cur = job["status"]
+    # 关于某次申请的邮件（对方已查看 / 职位已关闭 / 其他）本身不推进状态，但说明你投过了：
+    # 职位还停在 新 / 想投 / 不投 的，至少改成已投（比如邮件补抓按"职位已关闭"邮件建的职位）
+    if new is None and category in ("viewed", "closed", "other") and cur in ("new", "shortlisted", "skipped"):
+        new = "applied"
     if new == "rejected":
         move = cur not in ("offer", "rejected")
     else:
