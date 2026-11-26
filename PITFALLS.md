@@ -102,6 +102,11 @@
 - **"能做"不等于"能投"**：data engineer 能做，但这份 AI 方向的简历过不了 ATS。打分要问"不改叙事能不能过筛"，不是"有没有能力"。
 - （已删除的 embedding 方案）召回够、精度不够：投过的都在线以上，但线以上大部分仍要手动跳过。
 
+## SQLite 先读后写的事务会立刻报 database is locked（2026-11-27）
+`SAVEPOINT` 开的是延迟事务：先 SELECT 拿到读快照，再 UPDATE 时要升级成写锁。如果这时别的连接（网页、Gmail 同步、后台打分）
+正在写或刚提交过，SQLite 直接返回 busy，**不走 busy timeout 的 30 秒等待**（等了也会死锁），SEEK 整轮就断了。
+→ `Ingestor.add()` 不在事务里时先 `BEGIN IMMEDIATE` 拿写锁（这一步会正常等待），测试见 `test_rules.Concurrency`。
+
 ## 环境
 
 - **Python 3.14 没有 pip**。→ 全部只用标准库 + 系统自带的 `cryptography`、`PIL`。

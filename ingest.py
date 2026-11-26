@@ -36,11 +36,18 @@ class Ingestor:
     def add(self, p):
         """返回 'new' 或 'seen'。一条帖子的所有写入在一个保存点里：中途出错整条撤回再抛出，
         不会留下没挂到 job 上的 posting（下轮按 source_id 会当成"已见"，再也挂不回去）。"""
+        # 不在事务里时先 BEGIN IMMEDIATE 拿写锁：SAVEPOINT 开的是延迟事务，先读后写时如果别的连接
+        # （网页、Gmail 同步、后台打分）刚好在写，升级写锁会立刻报 database is locked，不走 30 秒的等待。
+        own = not self.conn.in_transaction
+        if own:
+            self.conn.execute("BEGIN IMMEDIATE")
         self.conn.execute("SAVEPOINT add_posting")
         try:
             r = self._add(p)
         except BaseException:
             self.conn.execute("ROLLBACK TO add_posting"); self.conn.execute("RELEASE add_posting")
+            if own:
+                self.conn.rollback()
             self._cache = None   # 缓存可能已经记了撤回的东西，或者 job 被网页合并删掉了
             raise
         self.conn.execute("RELEASE add_posting")
