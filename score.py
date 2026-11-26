@@ -167,6 +167,7 @@ class Background:
         conn.row_factory = sqlite3.Row
         try:
             while True:
+                stopping = self._stop.is_set()
                 try:
                     for r in _rows(conn, "pending"):
                         if r["id"] not in self._seen:
@@ -174,8 +175,9 @@ class Background:
                             self._futs.append(self._pool.submit(self._one, r))
                 except sqlite3.Error as e:   # 抓取那边正在写：下一次再查
                     print(f"[score] 查新职位出错：{e}", file=sys.stderr)
-                if self._stop.wait(self.POLL):
+                if stopping:   # 抓取结束后再查最后一遍：最后几秒入库的职位也要打（之前会漏到下一轮）
                     break
+                self._stop.wait(self.POLL)
         finally:
             conn.close()
 
