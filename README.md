@@ -4,8 +4,9 @@ English | [中文](README.zh-CN.md)
 
 A personal job tracker. It scrapes SEEK and LinkedIn, filters and deduplicates the postings, stores them in SQLite (`jobs.db`), scores each one against my resume with an LLM, and serves a mobile-first web app for reviewing jobs and tracking applications, with push notifications to my phone.
 
-- What it does, in detail (Chinese): [DONE.md](DONE.md)
-- Pitfalls hit along the way (Chinese): [PITFALLS.md](PITFALLS.md)
+- How the project works, data dictionary, API, rules (Chinese): [ARCHITECTURE.md](ARCHITECTURE.md)
+- Change log (Chinese): [CHANGELOG.md](CHANGELOG.md)
+- Rules for AI coding agents: [CLAUDE.md](CLAUDE.md)
 
 ## Access
 
@@ -28,7 +29,7 @@ Everything runs as systemd user units, with lingering enabled so they start at b
 systemctl --user list-timers auto-job.timer       # when the next run is
 systemctl --user start auto-job.service           # run once now
 journalctl --user -u auto-job.service -n 50       # logs
-systemctl --user restart auto-job-web.service     # restart the web app after changing web.py / static
+systemctl --user restart auto-job-web.service     # restart the web app after changing web.py (static files are read per request)
 ```
 
 LinkedIn's logged-in mode runs Chrome on an Xvfb virtual display (no window pops up; `sudo apt install xvfb`), but it needs a logged-in desktop session so the keyring is unlocked and cookies can be read. If the login has expired, or no desktop session is logged in, it falls back to LinkedIn's public guest endpoints and shows a red banner in the web app.
@@ -50,7 +51,10 @@ python3 run.py                       # scrape once by hand (SEEK last 3 days + L
 python3 ingest.py --refilter         # re-run filters after editing filters.toml (keeps manual statuses)
 python3 score.py --rescore           # re-score pending jobs after editing ~/job-match/AGENTS.md
 python3 push.py test "title" "body"  # send a test push to the phone
-python3 -m unittest test_rules       # tests for filtering and dedup
+python3 -m unittest test_core        # core tests (status rules, background scorer, concurrent writes)
+python3 -m unittest test_rules       # tests for filtering and dedup (need local filters.toml)
+python3 docs_check.py                # docs match the code
+node checks/ui_check.mjs             # web page check against the running server
 python3 gmail.py test                # test the read-only Gmail connection (re-authorise: python3 gmail.py auth)
 python3 run.py --only gmail          # sync Gmail only
 ```
@@ -77,3 +81,7 @@ python3 run.py --only gmail          # sync Gmail only
 | `email_lookup.py` | Email lookup: when an email matches no job in the database, search SEEK / LinkedIn and create the job |
 | `llm.py` | Gemini email classification (with a monthly budget cap) |
 | `test_rules.py` | Tests (not in git: they depend on my personal rules) |
+| `test_core.py` | Core tests that don't depend on personal rules |
+| `docs_check.py` | Checks ARCHITECTURE.md / CHANGELOG.md against the code (run by the pre-commit hook) |
+| `checks/ui_check.mjs` | Web page check: script syntax, page boot, every apply-link case |
+| `hooks/` | Git hooks (`git config core.hooksPath hooks`): require a CHANGELOG entry and a passing docs check |

@@ -1,0 +1,17 @@
+#!/bin/sh
+# 提交前检查（启用：git config core.hooksPath hooks；紧急跳过：git commit --no-verify）
+# 1. 除了纯文档（*.md），改了任何文件都必须同时改 CHANGELOG.md
+# 2. docs_check.py：核对的是这次要提交的内容（暂存区导出的快照），不是工作区
+repo=$(git rev-parse --show-toplevel) || exit 1
+cd "$repo" || exit 1
+others=$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACDMRTUXB | grep -v '\.md$')
+if [ -n "$others" ] && ! git diff --cached --name-only | grep -qx 'CHANGELOG.md'; then
+  echo "pre-commit：改了这些文件，但 CHANGELOG.md 没有一起提交："
+  printf '%s\n' "$others" | sed 's/^/  /'
+  echo "按 CLAUDE.md 在 CHANGELOG.md 加一条（标题和提交标题一致），需要时同步更新 ARCHITECTURE.md。"
+  exit 1
+fi
+snap=$(mktemp -d) || exit 1
+trap 'rm -rf "$snap"' EXIT
+git checkout-index -a --prefix="$snap/"
+python3 "$snap/docs_check.py" --root "$snap" --repo "$repo"

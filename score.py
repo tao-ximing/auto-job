@@ -54,7 +54,7 @@ def _rows(conn, which):
              "all": "j.filtered=0 AND j.llm_score IS NULL",
              "rescore": "j.filtered=0 AND j.status IN ('new','shortlisted')"}[which]
     return conn.execute(f"""
-        SELECT j.id, j.title, j.company, j.location,
+        SELECT j.id, j.created_at, j.title, j.company, j.location,
                (SELECT description FROM postings p WHERE p.job_id=j.id AND description IS NOT NULL
                 ORDER BY length(description) DESC LIMIT 1) jd,
                (SELECT group_concat(DISTINCT coalesce(work_arrangement, '')) FROM postings p WHERE p.job_id=j.id) wa,
@@ -110,15 +110,21 @@ def check():
             raise Unavailable(f"{WORKDIR}/{f} 不存在")
 
 
-def _save(conn, jid, out, err, tag=""):
-    """写结果，返回 True = 打上了分。只更新还在库里的职位（打分期间可能被合并删掉）。"""
+def _save(conn, r, out, err, tag=""):
+    """写结果，返回 True = 打上了分。r 是打分时读到的那一行（id + created_at）。
+    只更新还是同一个职位的行：打分期间它可能被合并删掉，而 SQLite 会把最大的 id 重新分配给下一个新职位，
+    只按 id 更新的话分数会写到别的职位上。"""
+    jid = r["id"]
     if out is None:
         print(f"[score] #{jid} 失败：{err}", file=sys.stderr)
         return False
     detail = {k: out[k] for k in ("reason", "gaps_minor", "gaps_major", "red_flags")} | {"model": MODEL, "at": now()}
-    conn.execute("UPDATE jobs SET llm_score=?, llm_track=?, llm_detail=? WHERE id=?",
-                 (out["score"], out["track"], json.dumps(detail, ensure_ascii=False), jid))
+    n = conn.execute("UPDATE jobs SET llm_score=?, llm_track=?, llm_detail=? WHERE id=? AND created_at=?",
+                     (out["score"], out["track"], json.dumps(detail, ensure_ascii=False), jid, r["created_at"])).rowcount
     conn.commit()
+    if not n:
+        print(f"[score] #{jid} 打分期间被合并或删除了，丢弃这个分数", file=sys.stderr)
+        return False
     print(f"[score] {tag}#{jid} {out['score']:3d} {out['track']:<11} {out['reason']}", file=sys.stderr)
     return True
 
@@ -129,8 +135,8 @@ def run(conn, which="pending", verbose=True):
     rows = _rows(conn, which)
     ok = bad = 0
     with ThreadPoolExecutor(PARALLEL) as ex:
-        for n, (jid, out, err) in enumerate(ex.map(score_one, rows), 1):
-            if _save(conn, jid, out, err, f"{n}/{len(rows)} "):
+        for n, (r, (_, out, err)) in enumerate(zip(rows, ex.map(score_one, rows)), 1):
+            if _save(conn, r, out, err, f"{n}/{len(rows)} "):
                 ok += 1
             else:
                 bad += 1
@@ -170,8 +176,9 @@ class Background:
                 stopping = self._stop.is_set()
                 try:
                     for r in _rows(conn, "pending"):
-                        if r["id"] not in self._seen:
-                            self._seen.add(r["id"])
+                        key = (r["id"], r["created_at"])   # id 可能被合并后复用，带上创建时间
+                        if key not in self._seen:
+                            self._seen.add(key)
                             self._futs.append(self._pool.submit(self._one, r))
                 except sqlite3.Error as e:   # 抓取那边正在写：下一次再查
                     print(f"[score] 查新职位出错：{e}", file=sys.stderr)
@@ -182,9 +189,9 @@ class Background:
             conn.close()
 
     def _one(self, r):
-        jid, out, err = score_one(r)
+        _, out, err = score_one(r)
         with self._db_lock:
-            return _save(self._db, jid, out, err)
+            return _save(self._db, r, out, err)
 
     def finish(self):
         self._stop.set()

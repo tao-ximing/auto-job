@@ -1,0 +1,10 @@
+#!/bin/sh
+# 提交标题必须是这次提交的 CHANGELOG.md 里的一个标题行（"## <提交标题>"）。
+# 提交标题按 git 的算法取：去掉注释和开头空行后的第一段，多行用空格连起来（和 git log --format=%s 一致）。
+repo=$(git rev-parse --show-toplevel) || exit 1
+subject=$(git stripspace --strip-comments < "$1" | awk 'NF==0{exit} {printf "%s%s", (n++ ? " " : ""), $0}')
+[ -z "$subject" ] && exit 0
+if ! git -C "$repo" show :CHANGELOG.md 2>/dev/null | grep -qxF "## $subject"; then
+  echo "commit-msg：CHANGELOG.md 里没有标题行「## $subject」。"
+  exit 1
+fi

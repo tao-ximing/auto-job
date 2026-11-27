@@ -2,7 +2,7 @@
 
 - 第一次只拉当天的邮件，之后按 Gmail historyId 增量。
 - 不相关的邮件不存、不发给 Gemini。
-- 状态只往前推：确认邮件把 新 / 想投 改成 已投；拒信改成 被拒；笔试 / 面试 / offer 同理。被拒和 offer 不会被覆盖。
+- 邮件分类的结果直接是职位状态（db.EMAIL_STATUSES）；职位状态怎么变只看 db.next_status。
 - 匹配不上的求职邮件留在"未归类"，网页上手动关联或忽略。
 
   python3 gmail_sync.py          # 同步一次

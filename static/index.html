@@ -379,7 +379,7 @@ $('sheetGap').addEventListener('click', closeSheet);   // 点弹层外面
 // ── 数据 ──
 async function loadSummary() {
   const s = state.summary = await api('/api/summary');
-  // 服务端页面更新了：在没打字、没开弹层的时候重新加载（详情的 ?job= 在地址里，重新加载后还会打开）
+  // 服务端页面更新了：在没打字、没开弹层的时候重新加载（打开着的职位详情会关掉、回到列表：地址里不带职位 id）
   if (state.ver && s.ver && s.ver !== state.ver && !['TEXTAREA', 'INPUT'].includes(document.activeElement?.tagName)
       && !$('sheetWrap').classList.contains('open')) { location.reload(); return; }
   state.ver ??= s.ver;

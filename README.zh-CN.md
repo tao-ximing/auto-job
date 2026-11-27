@@ -4,8 +4,9 @@
 
 抓 SEEK + LinkedIn 的职位 → 过滤、去重 → SQLite（`jobs.db`）→ 网页查看、跟踪申请 → 手机推送。
 
-- 做了什么：[DONE.md](DONE.md)
-- 踩过的坑：[PITFALLS.md](PITFALLS.md)
+- 项目说明（结构、数据字典、接口、规则）：[ARCHITECTURE.md](ARCHITECTURE.md)
+- 修改记录：[CHANGELOG.md](CHANGELOG.md)
+- 给 AI 编码助手的规则：[CLAUDE.md](CLAUDE.md)
 
 ## 访问
 
@@ -28,7 +29,7 @@
 systemctl --user list-timers auto-job.timer       # 下次什么时候跑
 systemctl --user start auto-job.service           # 现在手动跑一次
 journalctl --user -u auto-job.service -n 50       # 看日志
-systemctl --user restart auto-job-web.service     # 改了 web.py / static 后重启网页
+systemctl --user restart auto-job-web.service     # 改了 web.py 后重启网页（static 每次请求都从磁盘读，不用重启）
 ```
 
 LinkedIn 登录模式的 Chrome 跑在 Xvfb 虚拟屏幕上（不弹窗口；`sudo apt install xvfb`），但需要已登录的桌面会话（keyring 解锁才能读 cookie）；登录失效或没登录桌面时会自动改用不登录的公开接口，网页顶部标红。
@@ -41,7 +42,10 @@ python3 run.py                       # 手动抓一遍（SEEK 3 天 + LinkedIn 2
 python3 ingest.py --refilter         # 改了 filters.toml 后重算过滤（保留手动状态）
 python3 score.py --rescore           # 改了 ~/job-match/AGENTS.md 后给待处理的重新打分
 python3 push.py test "标题" "内容"    # 给手机发一条测试推送
-python3 -m unittest test_rules       # 测试过滤和去重
+python3 -m unittest test_core        # 核心测试（状态规则、后台打分、并发写入）
+python3 -m unittest test_rules       # 测试过滤和去重（需要本机 filters.toml）
+python3 docs_check.py                # 文档和代码对得上
+node checks/ui_check.mjs             # 网页检查（对正在运行的服务）
 python3 gmail.py test                # 测试 Gmail 只读连接（重新授权：python3 gmail.py auth）
 python3 run.py --only gmail          # 只同步 Gmail
 ```
@@ -68,3 +72,7 @@ python3 run.py --only gmail          # 只同步 Gmail
 | `llm.py` | Gemini 分类（带月度预算上限） |
 | `score.py` | 匹配分：agy CLI 按 `~/job-match/AGENTS.md`（简历 + 规则，不进 git）打分 |
 | `test_rules.py` | 测试 |
+| `test_core.py` | 核心测试（不依赖个人规则） |
+| `docs_check.py` | 把 ARCHITECTURE.md / CHANGELOG.md 和代码逐项对比（提交前钩子会跑） |
+| `checks/ui_check.mjs` | 网页检查：脚本语法、页面启动、投递链接每种情况 |
+| `hooks/` | git 钩子（`git config core.hooksPath hooks`）：要求写 CHANGELOG、文档核对通过 |

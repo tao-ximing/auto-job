@@ -78,7 +78,8 @@ def find_linkedin(company, title):
             "title": t, "company": co, "location": hit["location"], "description": d["description"],
             "work_type": d["criteria"].get("Employment type"),
             "extra": {"mode": "guest", "via": "email_lookup", "posted_text": d["posted_text"], "applicants": d["applicants"],
-                      "seniority": d["criteria"].get("Seniority level"), "industries": d["criteria"].get("Industries")}}
+                      "seniority": d["criteria"].get("Seniority level"), "industries": d["criteria"].get("Industries"),
+                      "quick_apply": d["quick_apply"]}}
 
 
 def find(company, title, hint=None):
