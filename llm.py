@@ -11,7 +11,7 @@ from datetime import datetime
 MODEL = os.environ.get("AUTO_JOB_GEMINI_MODEL", "gemini-flash-lite-latest")
 MONTHLY_BUDGET = float(os.environ.get("AUTO_JOB_GEMINI_BUDGET", "8"))   # 美元
 PRICE_IN, PRICE_OUT = 0.50 / 1e6, 3.00 / 1e6                           # 每 token，偏高估计
-CATEGORIES = ["applied", "viewed", "rejected", "assessment", "interview", "offer", "closed", "other"]
+from db import EMAIL_STATUSES
 
 
 def _key():
@@ -45,17 +45,18 @@ SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "job_related": {"type": "BOOLEAN", "description": "是否是关于某次具体求职申请的邮件（职位推荐、营销、newsletter 都算 false）"},
-        "category": {"type": "STRING", "enum": CATEGORIES},
+        "status": {"type": "STRING", "enum": EMAIL_STATUSES, "description": "这封邮件说明这次申请处于什么状态"},
         "company": {"type": "STRING", "description": "招聘公司名，没有就空字符串"},
         "title": {"type": "STRING", "description": "职位名，没有就空字符串"},
     },
-    "required": ["job_related", "category", "company", "title"],
+    "required": ["job_related", "status", "company", "title"],
 }
 PROMPT = """You classify emails a job seeker received about their job applications.
-Categories: applied = confirmation the application was received; viewed = employer viewed the application;
-rejected = not progressing / unsuccessful; assessment = online test, coding challenge or take-home task;
-interview = invitation to interview / phone screen / scheduling; offer = job offer; closed = the job ad closed;
-other = anything else about an application (e.g. asking for more information).
+For a job-related email, return the status of that application it shows:
+applied = the application was received, or the employer viewed it, or anything else that only shows the person applied
+(e.g. asking for more information); assessment = online test, coding challenge or take-home task;
+interview = invitation to interview / phone screen / scheduling; offer = job offer;
+rejected = not progressing / unsuccessful; closed = the job ad closed or expired.
 Job alerts, recommendations, newsletters and marketing are job_related=false.
 Return company and title exactly as written in the email.
 
@@ -66,7 +67,7 @@ Subject: {subject}
 
 
 def classify_email(conn, sender, subject, body):
-    """返回 dict(job_related, category, company, title)；超预算 / 没 key / 出错返回 None。"""
+    """返回 dict(job_related, status, company, title)；超预算 / 没 key / 出错返回 None。"""
     key = _key()
     if not key or month_cost(conn) >= MONTHLY_BUDGET:
         return None
@@ -85,6 +86,6 @@ def classify_email(conn, sender, subject, body):
         out = json.loads(d["candidates"][0]["content"]["parts"][0]["text"])
     except (KeyError, IndexError, ValueError):
         return None
-    if out.get("category") not in CATEGORIES:
-        out["category"] = "other"
+    if out.get("status") not in EMAIL_STATUSES:
+        out["status"] = None
     return out

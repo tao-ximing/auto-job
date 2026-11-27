@@ -130,7 +130,7 @@ def job_detail(c, jid):
         FROM dup_candidates d JOIN jobs o ON o.id = CASE WHEN d.job_a=? THEN d.job_b ELSE d.job_a END
         WHERE (d.job_a=? OR d.job_b=?) AND d.status='pending'""", (jid, jid, jid))]
     emails = [dict(r) for r in c.execute(
-        "SELECT id, thread_id, received_at, from_name, from_addr, subject, snippet, category FROM emails WHERE job_id=? ORDER BY received_at DESC", (jid,))]
+        "SELECT id, thread_id, received_at, from_name, from_addr, subject, snippet, status FROM emails WHERE job_id=? ORDER BY received_at DESC", (jid,))]
     return {"job": dict(j), "postings": postings, "dups": dups, "emails": emails,
             "events": [dict(r) for r in c.execute("SELECT * FROM events WHERE job_id=? ORDER BY at DESC, id DESC", (jid,))],
             "qa": [dict(r) for r in c.execute("SELECT * FROM application_qa WHERE job_id=? ORDER BY id", (jid,))]}
@@ -237,7 +237,7 @@ class H(BaseHTTPRequestHandler):
                 c.commit()
                 return self.send(200, {"ok": True})
             if method == "GET" and path == "/api/emails":
-                rows = c.execute("""SELECT id, thread_id, received_at, from_name, from_addr, subject, snippet, category, company, title, match_reason
+                rows = c.execute("""SELECT id, thread_id, received_at, from_name, from_addr, subject, snippet, status, company, title, match_reason
                                     FROM emails WHERE state=? ORDER BY received_at DESC LIMIT 200""", (qs.get("state", "unmatched"),))
                 return self.send(200, [dict(r) for r in rows])
             if method == "POST" and (m := re.fullmatch(r"/api/emails/(\w+)/(link|ignore)", path)):
@@ -251,7 +251,7 @@ class H(BaseHTTPRequestHandler):
                 jid = int(self.body()["job_id"])
                 if e["state"] == "matched" and e["job_id"] == jid:   # 重复点击：不重复写时间线
                     return self.send(200, {"ok": True, "status": None, "job": jid})
-                new = gmail_sync.apply_email(c, m[1], jid, e["category"] or "other", e["subject"], source="manual")
+                new = gmail_sync.apply_email(c, m[1], jid, e["status"], e["subject"], source="manual")
                 c.execute("UPDATE emails SET match_reason='手动关联' WHERE id=?", (m[1],))
                 c.commit()
                 return self.send(200, {"ok": True, "status": new, "job": jid})

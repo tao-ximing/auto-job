@@ -9,7 +9,7 @@
 """
 import argparse, json, os, subprocess, sys, tempfile, tomllib, traceback
 import linkedin_guest, rules, seek
-from db import connect, now
+from db import STATUS_LABEL, connect, now
 from ingest import Ingestor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -218,7 +218,7 @@ def notify_mail(conn, stats):
         if job_id:
             j = conn.execute("SELECT title, company FROM jobs WHERE id=?", (job_id,)).fetchone()
             who = f"{j['title']} @ {j['company']}" if j else ""
-        lines.append(f"{gmail_sync.LABEL[cat]}：{who or subject}")
+        lines.append(f"{STATUS_LABEL[cat]}：{who or subject}")
     title = {"offer": "收到 Offer 🎉", "interview": "面试邀请", "assessment": "笔试/测评"}.get(items[0][0], "申请有更新")
     url = f"/?job={items[0][2]}" if len(items) == 1 and items[0][2] else "/"
     try:

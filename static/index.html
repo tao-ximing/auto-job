@@ -259,7 +259,7 @@ const isQuick = p => !!p.quick_apply;
 // 投递链接：一键投的打开 SEEK / LinkedIn 的投递页；外部投递的有官网链接就直接打开，没有就打开职位页
 const applyUrl = p => p.extra?.apply_url || p.apply_url || p.url;
 const SRC = { seek: 'SEEK', linkedin: 'LinkedIn', email: 'Gmail' };   // email：搜不到职位帖子，按邮件建的职位
-const MAIL = { applied: '已投递确认', viewed: '对方已查看', rejected: '被拒', assessment: '笔试/测评', interview: '面试邀请', offer: 'Offer', closed: '职位已关闭', other: '其他' };
+// 邮件标签：邮件说明的职位状态，和职位状态用同一套名字（STATUS）；没认出来的显示"邮件"
 const MAIL_CLS = { rejected: 'bad', interview: 'ok', offer: 'ok', assessment: 'warn' };
 const gmailUrl = t => `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(t)}`;
 const ICON = {
@@ -555,7 +555,7 @@ function renderDetail(d, keepScroll) {
       <div class="row-btns"><button class="btn primary" data-dup="merge" data-b="${x.other_id}">是同一个，合并</button><button class="btn" data-dup="distinct" data-b="${x.other_id}">不是</button></div></div>`).join('')}
 
     ${d.emails.length ? `<div class="sec"><h3>相关邮件</h3>${d.emails.map(m => `<a class="mail" href="${gmailUrl(m.thread_id)}" target="_blank" rel="noopener">
-      <span class="chip ${MAIL_CLS[m.category] || ''}">${MAIL[m.category] || '邮件'}</span> <span class="d-sub" style="font-size:12px">${fmt(m.received_at)} · ${esc(m.from_name || m.from_addr)}</span>
+      <span class="chip ${MAIL_CLS[m.status] || ''}">${STATUS[m.status] || '邮件'}</span> <span class="d-sub" style="font-size:12px">${fmt(m.received_at)} · ${esc(m.from_name || m.from_addr)}</span>
       <div class="s">${esc(m.subject)}</div><div class="sn">${esc(m.snippet)}</div></a>`).join('')}</div>` : ''}
 
     <div class="sec"><h3>职位描述</h3>
@@ -651,7 +651,7 @@ async function mailsSheet(quiet) {
   if (!list.length) { closeSheet(); if (!quiet) toast('没有未归类的邮件'); return; }
   openSheet(`<h4>未归类的求职邮件</h4><p>匹配不上职位的邮件。关联后会按邮件内容更新职位状态。</p>
     ${list.map(m => `<div class="mail" style="cursor:default">
-      <span class="chip ${MAIL_CLS[m.category] || ''}">${MAIL[m.category] || '邮件'}</span> <span class="d-sub" style="font-size:12px">${fmt(m.received_at)} · ${esc(m.from_name || m.from_addr)}</span>
+      <span class="chip ${MAIL_CLS[m.status] || ''}">${STATUS[m.status] || '邮件'}</span> <span class="d-sub" style="font-size:12px">${fmt(m.received_at)} · ${esc(m.from_name || m.from_addr)}</span>
       <div class="s">${esc(m.subject)}</div>
       <div class="sn">${m.company ? `识别到：${esc(m.company)}${m.title ? ' · ' + esc(m.title) : ''} — ` : ''}${esc(m.match_reason || '')}</div>
       <div class="row-btns"><button class="btn primary" data-mail-link="${m.id}" data-q="${esc(m.company || '')}">关联职位</button>

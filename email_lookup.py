@@ -103,7 +103,7 @@ def run(conn, ing, verbose=True):
     # 只补抓有公司 + 职位名的邮件：只有公司名时搜出来同公司好几个职位，挑哪个都是瞎猜（会把拒信记到别的职位上），留给你手动关联。
     # 上次出错（超时、5xx 等）的 6 小时后重试；确定搜不到的不再重试。
     retry_before = (datetime.now(timezone.utc) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rows = conn.execute("""SELECT id, thread_id, from_addr, subject, category, company, title, body FROM emails
+    rows = conn.execute("""SELECT id, thread_id, from_addr, subject, status, company, title, body FROM emails
                            WHERE state='unmatched' AND coalesce(company,'') != '' AND coalesce(title,'') != ''
                              AND (lookup_at IS NULL OR (lookup_result LIKE '出错%' AND lookup_at < ?))""", (retry_before,)).fetchall()
     cache = {}   # 同一轮里同一个公司 + 职位只搜一次（中介 / 招聘方常常连发好几封）
@@ -134,9 +134,9 @@ def run(conn, ing, verbose=True):
             r = ing.add(p)
             conn.commit()
             stats["added"] += r == "new"
-            job_id, reason = match_job(conn, e["company"], e["title"], e["category"] or "other")
+            job_id, reason = match_job(conn, e["company"], e["title"], e["status"])
             if job_id:
-                apply_email(conn, e["id"], job_id, e["category"] or "other", e["subject"])
+                apply_email(conn, e["id"], job_id, e["status"], e["subject"])
                 src = "邮件本身（SEEK / LinkedIn 都没搜到）" if p["source"] == "email" else p["source"].upper()
                 conn.execute("UPDATE emails SET match_reason=? WHERE id=?", (f"补抓自 {src}；{reason}", e["id"]))
                 stats["matched"] += 1

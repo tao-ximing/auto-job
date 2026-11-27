@@ -10,11 +10,9 @@
 import base64, html, re, sys, time, urllib.error
 from datetime import datetime, timezone
 import gmail, llm, rules
-from db import connect, now
+from db import STATUS_LABEL, connect, next_status, now
 
-LABEL = {"applied": "已投递确认", "viewed": "对方已查看", "rejected": "被拒", "assessment": "笔试/测评", "interview": "面试邀请",
-         "offer": "Offer", "closed": "职位已关闭", "other": "其他"}
-NOTABLE = {"rejected", "assessment", "interview", "offer"}   # 这几类推送到手机
+NOTABLE = {"rejected", "assessment", "interview", "offer"}   # 邮件说明的状态是这几个时推送到手机
 
 # ── 预筛：只看发件人和标题 ───────────────────────────────────────────────────
 IGNORE_FROM = re.compile(r"@(email\.seek\.com\.au|em\.linkedin\.com|e\.linkedin\.com|news\.|marketing\.)", re.I)
@@ -105,11 +103,11 @@ SUBJ_ASSESS = re.compile(r"assessment|coding (test|challenge)|hackerrank|codilit
 SUBJ_OFFER = re.compile(r"letter of offer|offer of employment|job offer|employment offer", re.I)
 SUBJ_UNSURE = re.compile(r"update|outcome|next step|responded|status|one more step", re.I)   # 标题说明不了结果，要看正文 / 问 Gemini
 
-TEMPLATES = [  # (category 或 None=看正文, 搜 subject/body, 正则)
+TEMPLATES = [  # (邮件说明的状态 或 None=看正文, 搜 subject/body, 正则)。"对方已查看"说明投过了，算 applied
     ("applied", "body", r"your application for (?P<title>.+?) was successfully submitted to (?P<company>[^.\[]+?)(?=\s+seek\b|\.|\s\[|\s+Each|$)"),
     ("rejected", "body", r"your application for (?P<title>.+?) advertised by (?P<company>.+?) is unlikely to progress"),
-    ("viewed", "subject", r"^(?P<company>.+?) has viewed your application for (?P<title>.+)$"),
-    ("viewed", "subject", r"your application was viewed by (?P<company>.+)$"),
+    ("applied", "subject", r"^(?P<company>.+?) has viewed your application for (?P<title>.+)$"),
+    ("applied", "subject", r"your application was viewed by (?P<company>.+)$"),
     ("closed", "subject", r"the (?P<title>.+?) job with (?P<company>.+?) has closed"),
     ("applied", "subject", r"your application was sent to (?P<company>.+)$"),
     (None, "subject", r"^your application to (?P<title>.+?) at (?P<company>.+)$"),
@@ -121,36 +119,36 @@ TEMPLATES = [  # (category 或 None=看正文, 搜 subject/body, 正则)
 
 
 def classify_rules(sender, subject, body):
-    """返回 (category 或 None, company, title, confident)。confident=False 时交给 Gemini 确认。"""
-    category, company, title, confident = None, None, None, False
+    """返回 (邮件说明的状态 或 None, company, title, confident)。confident=False 时交给 Gemini 确认。"""
+    status, company, title, confident = None, None, None, False
     for cat, where, pat in TEMPLATES:
         m = re.search(pat, subject if where == "subject" else body, re.I)
         if m:
-            category, confident = cat, cat is not None
+            status, confident = cat, cat is not None
             company = m.groupdict().get("company")
             title = m.groupdict().get("title")
             break
     if company and not title and "linkedin" in sender.lower():   # LinkedIn "sent to X"：正文开头是 "职位 公司 地点"
         m = re.search(r"Your application was sent to " + re.escape(company) + r"\s+(?P<title>.+?)\s+" + re.escape(company), body)
         title = m.group("title") if m else None
-    if category is None:
+    if status is None:
         unsure = bool(SUBJ_UNSURE.search(subject))
         for cat, rx in (("rejected", SUBJ_REJECT), ("offer", SUBJ_OFFER), ("interview", SUBJ_INTERVIEW), ("assessment", SUBJ_ASSESS)):
             if rx.search(subject):
-                category, confident = cat, True
+                status, confident = cat, True
                 break
-        if category is None and REJECT.search(body):            # 具体的拒信措辞：可信
-            category, confident = "rejected", True
-        if category is None and APPLIED.search(subject) and not unsure:
-            category, confident = "applied", True
-        if category is None:                                    # 只在正文里出现的线索：先记下，交给 Gemini 确认
+        if status is None and REJECT.search(body):            # 具体的拒信措辞：可信
+            status, confident = "rejected", True
+        if status is None and APPLIED.search(subject) and not unsure:
+            status, confident = "applied", True
+        if status is None:                                    # 只在正文里出现的线索：先记下，交给 Gemini 确认
             text = f"{subject}\n{body}"
             for cat, rx in (("offer", OFFER), ("interview", INTERVIEW), ("assessment", ASSESS), ("applied", APPLIED)):
                 if rx.search(text):
-                    category = cat
+                    status = cat
                     break
     clean = lambda s: (s or "").strip(" .,-–|:").strip() or None
-    return category, clean(company), clean(title), confident
+    return status, clean(company), clean(title), confident
 
 
 # ── 匹配职位 ─────────────────────────────────────────────────────────────
@@ -164,7 +162,7 @@ def _co_match(a, b):
     return len(short) >= 4 and (long_ + " ").startswith(short + " ")
 
 
-def match_job(conn, company, title, category):
+def match_job(conn, company, title, status):
     cn, tn = rules.norm_company(company), rules.norm_title(title)
     if not cn:
         return None, "邮件里没找到公司名"
@@ -177,7 +175,7 @@ def match_job(conn, company, title, category):
         return None, f"库里没有 {company} 的职位"
     # 结果类邮件优先匹配已投的，确认类优先匹配还没投的
     prefer = {"applied": ("new", "shortlisted", "skipped", "closed", "applied")}.get(
-        category, ("applied", "assessment", "interview", "offer", "rejected"))
+        status, ("applied", "assessment", "interview", "offer", "rejected"))
     ranked = sorted(cands.items(), key=lambda kv: (kv[1][0], kv[1][1] in prefer), reverse=True)
     best_id, (best_t, _) = ranked[0]
     if len(cands) == 1 and (best_t >= 0.3 or not tn):
@@ -191,32 +189,20 @@ def match_job(conn, company, title, category):
 
 
 # ── 推进状态 ─────────────────────────────────────────────────────────────
-RANK = {"new": 0, "shortlisted": 1, "skipped": 1, "closed": 1, "applied": 2, "assessment": 3, "interview": 4, "offer": 6, "rejected": 5}
-TARGET = {"applied": "applied", "assessment": "assessment", "interview": "interview", "offer": "offer", "rejected": "rejected"}
-
-
-def apply_email(conn, email_id, job_id, category, subject, source="email", at=None):
-    """把邮件挂到职位上，按类别推进状态（只往前）。返回新状态或 None。at：事件时间（默认现在；同步时传收信时间）。"""
+def apply_email(conn, email_id, job_id, status, subject, source="email", at=None):
+    """把邮件挂到职位上，按邮件说明的状态改职位状态（规则见 db.next_status）。返回新状态或 None。
+    status：邮件说明的状态，None = 没认出来（只挂上，不改状态）。at：事件时间（默认现在；同步时传收信时间）。"""
     t = at or now()
     job = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not job:
         return None
-    new = TARGET.get(category)
-    cur = job["status"]
-    # 关于某次申请的邮件（对方已查看 / 职位已关闭 / 其他）本身不推进状态，但说明你投过了：
-    # 职位还停在 新 / 想投 / 不投 的，至少改成已投（比如邮件补抓按"职位已关闭"邮件建的职位）
-    if new is None and category in ("viewed", "closed", "other") and cur in ("new", "shortlisted", "skipped"):
-        new = "applied"
-    if new == "rejected":
-        move = cur not in ("offer", "rejected")
-    else:
-        move = new is not None and cur not in ("offer", "rejected") and RANK[new] > RANK.get(cur, 0)
+    new = next_status(job["status"], status)
     conn.execute("UPDATE emails SET job_id=?, state='matched' WHERE id=?", (job_id, email_id))
     conn.execute("INSERT INTO events (job_id, at, status, source, detail) VALUES (?,?,?,?,?)",
-                 (job_id, t, new if move else None, source, f"邮件 · {LABEL.get(category, category)}：{subject}"))
-    if move:
+                 (job_id, t, new, source, f"邮件 · {STATUS_LABEL.get(status, '未识别')}：{subject}"))
+    if new:
         conn.execute("UPDATE jobs SET status=?, updated_at=? WHERE id=?", (new, t, job_id))
-    return new if move else None
+    return new
 
 
 # ── 拉取 ────────────────────────────────────────────────────────────────
@@ -285,49 +271,49 @@ def process_message(conn, mid, stats, verbose=True):
     body = body_text(msg)
     if cand == "body" and not JOB_BODY.search(body):
         return
-    category, company, title, confident = classify_rules(sender, subject, body)
-    by = "rule"
+    status, company, title, confident = classify_rules(sender, subject, body)
+    by, ignore = "rule", False
     if not confident or not company:
         g = llm.classify_email(conn, sender, subject, body)
         if g is not None:
             by = "gemini"
             if not g.get("job_related"):
-                category = "ignore"
+                ignore = True
             else:
-                category = category if confident else g["category"]
+                status = status if confident else g["status"]
                 company = company or g.get("company") or None
                 title = title or g.get("title") or None
     name, addr = (re.match(r'\s*"?([^"<]*?)"?\s*<([^>]+)>', sender) or re.match(r"()(.*)", sender)).groups()
     received = datetime.fromtimestamp(int(msg["internalDate"]) / 1000).astimezone().isoformat(timespec="seconds")
     received_utc = datetime.fromtimestamp(int(msg["internalDate"]) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    state = "ignored" if category == "ignore" else "unmatched"
+    state = "ignored" if ignore else "unmatched"
     if state == "ignored":   # 和求职无关：只留 ID 防止重复处理，正文、摘要、发件人都不存
         name = addr = subject = body = None
         msg = {**msg, "snippet": ""}
-    conn.execute("""INSERT OR IGNORE INTO emails (id, thread_id, received_at, from_addr, from_name, subject, snippet, body, category,
+    conn.execute("""INSERT OR IGNORE INTO emails (id, thread_id, received_at, from_addr, from_name, subject, snippet, body, status,
                     company, title, state, classified_by, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                  (mid, msg["threadId"], received, addr, name, subject, html.unescape(msg.get("snippet", "")), body,
-                  None if category == "ignore" else (category or "other"), company, title, state, by, now()))
+                  None if ignore else status, company, title, state, by, now()))
     stats["stored"] += 1
     if state == "ignored":
         conn.commit()   # 跳过前也要提交，否则后面请求 Gmail / Gemini 时一直占着写锁
         return
-    job_id, reason = match_job(conn, company, title, category or "other")
+    job_id, reason = match_job(conn, company, title, status)
     conn.execute("UPDATE emails SET match_reason=? WHERE id=?", (reason, mid))
     if job_id:
-        apply_email(conn, mid, job_id, category or "other", subject, at=received_utc)
+        apply_email(conn, mid, job_id, status, subject, at=received_utc)
         stats["matched"] += 1
     else:
         stats["unmatched"] += 1
-    if category in NOTABLE:
-        stats["notable"].append((category, subject, job_id))
+    if status in NOTABLE:
+        stats["notable"].append((status, subject, job_id))
     if verbose:
-        print(f"[gmail] {LABEL.get(category or 'other')} | {company or '?'} | {title or '?'} | {'→ #%s' % job_id if job_id else '未归类：' + reason}")
+        print(f"[gmail] {STATUS_LABEL.get(status, '未识别')} | {company or '?'} | {title or '?'} | {'→ #%s' % job_id if job_id else '未归类：' + reason}")
     conn.commit()
 
 
 def sync(conn, verbose=True):
-    """返回 dict(seen, stored, matched, unmatched, notable=[(category, subject, job_id)])。"""
+    """返回 dict(seen, stored, matched, unmatched, notable=[(status, subject, job_id)])。"""
     ids, latest = new_message_ids(conn)
     known = {r[0] for r in conn.execute("SELECT id FROM emails")}
     stats = {"seen": 0, "stored": 0, "matched": 0, "unmatched": 0, "notable": []}
