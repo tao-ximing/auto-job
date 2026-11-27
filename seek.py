@@ -23,15 +23,14 @@ def html_to_text(s):
 
 
 def details(job_id):
-    """返回 (JD 纯文本, 是否一键投)。isLinkOut=false 表示在 SEEK 站内投递（Quick apply），true 是跳到公司官网。"""
+    """返回 (JD 纯文本, 是否一键投)。isLinkOut=false 表示在 SEEK 站内投递（Quick apply），true 是跳到公司官网。
+    一键投的按钮链接职位页 /job/<id>，不是投递页 /job/<id>/apply：SEEK App 的通用链接专门排除了 /apply，
+    链接投递页的话 iPhone 不会打开 App，只会开内嵌浏览器。"""
     q = 'query { d: jobDetails(id: "%s") { job { content(platform: WEB) isLinkOut } } }' % job_id
     j = http("https://au.seek.com/graphql", {"query": q})["data"]["d"]["job"]
     return html_to_text(j["content"]), j.get("isLinkOut") is False
 
 
-def apply_url(job_id):
-    """一键投的投递页。外部投递的拿不到官网链接（要登录后由 SEEK 跳转），用职位页。"""
-    return f"https://au.seek.com/job/{job_id}/apply"
 
 
 def search(name, params, days=3, known=frozenset(), page_size=100, max_pages=10):
@@ -62,7 +61,7 @@ def search(name, params, days=3, known=frozenset(), page_size=100, max_pages=10)
                     print(f"[seek] {j['id']} JD 获取失败: {e}", file=sys.stderr)
                     p["description"] = j.get("teaser")
                 p["extra"] = {"teaser": j.get("teaser"), "classification": [c["subclassification"]["description"] for c in j.get("classifications") or []],
-                              "quick_apply": quick, **({"apply_url": apply_url(j["id"])} if quick else {})}
+                              "quick_apply": quick}
                 time.sleep(random.uniform(1, 3))  # 别连续猛拉 JD
             yield p
         if all(j.get("listingDate") and datetime.fromisoformat(j["listingDate"].replace("Z", "+00:00")) < since for j in data):

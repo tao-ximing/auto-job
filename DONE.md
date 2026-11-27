@@ -45,7 +45,9 @@
 ## 一键投 / 投递链接
 
 - LinkedIn 的 Easy Apply 和 SEEK 的 Quick apply 统一叫 `quick_apply`（网页上「一键投」）。SEEK 从 JD 接口的 `isLinkOut` 判断（false = 站内投递）。
-- 一键投的职位，详情里的按钮直接打开 SEEK 投递页（`/job/<id>/apply`）或 LinkedIn 职位页（Easy Apply 在那里）。
+- 一键投的职位，详情里的按钮打开 SEEK / LinkedIn 职位页（`apply_url` 只存外部投递的官网地址）。不链接 SEEK 投递页 `/job/<id>/apply`：
+  SEEK App 的通用链接（apple-app-site-association）专门排除了 `/job/*/apply`，链接它的话 iPhone 不开 App、只开内嵌浏览器；职位页 `/job/*` 会开 App。
+- iPhone 上按链接去哪决定怎么打开：去 SEEK / LinkedIn 的（一键投、职位页）用普通链接，有 App 就开 App；去公司官网的用 `googlechromes://` 在 Chrome 打开。
 - LinkedIn 外部投递：登录模式抓取时读 "Apply on company website" 链接（`linkedin.com/safety/go/?url=<官网>`），存官网地址 `apply_url`，
   按钮「去官网投递」直接打开。不登录模式只看得出是不是外部投递（offsite 图标），拿不到地址。
 - SEEK 外部投递：不登录的接口只有 `isLinkOut` 标记，没有官网地址。每轮抓完 LinkedIn 后，用专用 profile（已登录 SEEK）打开

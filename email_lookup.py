@@ -56,8 +56,7 @@ def find_seek(company, title):
             "salary": j.get("salaryLabel") or None, "work_type": ", ".join(j.get("workTypes") or []) or None,
             "work_arrangement": ((j.get("workArrangements") or {}).get("displayText")) or None,
             "description": jd,
-            "extra": {"teaser": j.get("teaser"), "via": "email_lookup", "quick_apply": quick,
-                      **({"apply_url": seek.apply_url(j["id"])} if quick else {})}}
+            "extra": {"teaser": j.get("teaser"), "via": "email_lookup", "quick_apply": quick}}
 
 
 def find_linkedin(company, title):

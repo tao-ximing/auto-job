@@ -256,8 +256,9 @@ const RULE = { crowdwork_company: '众包/标注', crowdwork_title: '标注类�
 const TRACK = { ai: 'AI 方向', swe: '普通开发', other_story: '要换简历', cross_stack: '跨栈' };
 const scoreCls = s => s >= 70 ? 'ok' : s >= 45 ? '' : 'bad';
 const isQuick = p => !!p.quick_apply;
-// 投递链接：一键投的打开 SEEK / LinkedIn 的投递页；外部投递的有官网链接就直接打开，没有就打开职位页
-const applyUrl = p => p.extra?.apply_url || p.apply_url || p.url;
+// 投递链接：一键投的打开 SEEK / LinkedIn 职位页（会交给 App；SEEK App 不接 /apply 投递页）；
+// 外部投递的有官网链接（apply_url）就直接打开官网，没有就打开职位页
+const applyUrl = p => ((p.extra || p).quick_apply ? null : (p.extra || p).apply_url) || p.url;
 const SRC = { seek: 'SEEK', linkedin: 'LinkedIn', email: 'Gmail' };   // email：搜不到职位帖子，按邮件建的职位
 // 邮件标签：邮件说明的职位状态，和职位状态用同一套名字（STATUS）；没认出来的显示"邮件"
 const MAIL_CLS = { rejected: 'bad', interview: 'ok', offer: 'ok', assessment: 'warn' };
@@ -291,12 +292,15 @@ function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = u => /^https:\/\//i.test(u || '') ? u : '#';   // 职位链接只放行 https
-// iPhone / iPad：职位和投递链接直接在 Chrome App 里打开（googlechromes:// 是 Chrome 的 URL scheme）。
-// 不这样的话，主屏幕 PWA 里点外链会开在系统的内嵌浏览器里，而不是 Chrome。
+// iPhone / iPad 上按链接去哪决定怎么打开（不看 quick_apply 标记，标记缺了也不会判错）：
+// - 去 SEEK / LinkedIn 的（一键投、还没拿到官网链接的职位页）：普通 https，装了 App 的话系统会直接打开 App（那里是登录状态）
+// - 去公司官网的（外部投递）：googlechromes://，直接在 Chrome App 里打开。否则主屏幕 PWA 会开在系统的内嵌浏览器里
+const PLATFORM_HOST = /(^|\.)(seek\.com|seek\.com\.au|linkedin\.com)$/i;
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const extLink = u => {
   const s = safeUrl(u);
-  return s !== '#' && isIOS ? { href: s.replace(/^https:\/\//i, 'googlechromes://'), target: '' } : { href: s, target: ' target="_blank"' };
+  const chrome = s !== '#' && !PLATFORM_HOST.test(new URL(s).hostname);
+  return isIOS && chrome ? { href: s.replace(/^https:\/\//i, 'googlechromes://'), target: '' } : { href: s, target: ' target="_blank"' };
 };
 // 请求都带超时：手机走 4G + Tailscale 时连接偶尔会卡住，没有超时的话页面会一直等、看起来像整个 App 卡死
 async function api(path, body) {

@@ -91,6 +91,11 @@
 - **`GEMINI_API_KEY` 只在 `~/.bashrc` 里**，非交互 shell 和 systemd 读不到。→ 用到时从环境变量 / `.bashrc` / `.env` 读。
 
 - **主屏幕 PWA 里点外链会开在系统内嵌浏览器，不是 Chrome**（`target=_blank` 也一样）。→ iPhone 上把职位 / 投递链接的 `https://` 换成 `googlechromes://`，直接拉起 Chrome App。
+- **SEEK 投递页 `/job/<id>/apply` 打不开 SEEK App**：SEEK 的 apple-app-site-association 里写了 `NOT /job/*/apply`。→ 一键投链接职位页 `/job/<id>`。
+  查 App 接不接某个链接：看 `https://<域名>/.well-known/apple-app-site-association`。
+- **投递按钮有 4 种 + 兜底，改链接逻辑时每种都要测**：SEEK 一键投、LinkedIn 一键投、SEEK 外部投递（官网链接）、LinkedIn 外部投递（官网链接），
+  以及外部投递还没拿到官网链接时打开的 SEEK / LinkedIn 职位页。曾经按 `quick_apply` 标记决定跳不跳 Chrome，老帖子没这个标记就判错了。
+  → 按链接去哪决定：去 SEEK / LinkedIn 的用普通 https（有 App 就开 App），去公司官网的才用 googlechromes://。
 - **iOS 输入框字号 < 16px，聚焦时页面自动放大且不缩回**。→ input / select / textarea 统一 16px。
 
 ## 匹配分 / agy
